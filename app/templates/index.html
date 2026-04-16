@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="KCM AI Suite — Intelligent document translation for Indian legal documents">
+    <title>{{ app_name }} — Document Translator</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="app-container">
+
+        <!-- ─── Sidebar ──────────────────────────────────── -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <div class="logo-icon">
+                        <i data-lucide="scale" class="logo-svg"></i>
+                    </div>
+                    <div class="logo-text">
+                        <span class="logo-title">KCM AI</span>
+                        <span class="logo-subtitle">Suite</span>
+                    </div>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="nav-section-label">MODULES</div>
+                <a href="#" class="nav-item active" id="nav-translator">
+                    <i data-lucide="languages"></i>
+                    <span>Document Translator</span>
+                    <div class="nav-active-indicator"></div>
+                </a>
+                <a href="#" class="nav-item disabled" title="Coming Soon">
+                    <i data-lucide="calculator"></i>
+                    <span>Tax Computation</span>
+                    <span class="badge-soon">Soon</span>
+                </a>
+                <a href="#" class="nav-item disabled" title="Coming Soon">
+                    <i data-lucide="file-check"></i>
+                    <span>Document Verify</span>
+                    <span class="badge-soon">Soon</span>
+                </a>
+                <a href="#" class="nav-item disabled" title="Coming Soon">
+                    <i data-lucide="brain-circuit"></i>
+                    <span>AI Assistant</span>
+                    <span class="badge-soon">Soon</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="api-status" id="apiStatus">
+                    <div class="status-dot"></div>
+                    <span>Checking API…</span>
+                </div>
+                <div class="version-info">v{{ app_version }}</div>
+            </div>
+        </aside>
+
+        <!-- ─── Main Content ─────────────────────────────── -->
+        <main class="main-content">
+
+            <!-- Header -->
+            <header class="content-header">
+                <div class="header-left">
+                    <h1>
+                        <i data-lucide="languages" class="header-icon"></i>
+                        Document Translator
+                    </h1>
+                    <p class="header-desc">
+                        Translate scanned Gujarati legal documents to English
+                    </p>
+                </div>
+                <div class="header-right">
+                    <div class="powered-by">
+                        <span>Powered by</span>
+                        <strong>Sarvam AI</strong>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Content Area -->
+            <div class="content-body">
+
+                <!-- ─── Upload Section ───────────────────── -->
+                <section class="section upload-section" id="uploadSection">
+                    <div class="upload-zone" id="uploadZone">
+                        <div class="upload-icon-wrapper">
+                            <div class="upload-rings">
+                                <div class="ring ring-1"></div>
+                                <div class="ring ring-2"></div>
+                                <div class="ring ring-3"></div>
+                            </div>
+                            <i data-lucide="upload-cloud" class="upload-icon"></i>
+                        </div>
+                        <h3 class="upload-title">Drop your document here</h3>
+                        <p class="upload-subtitle">or click to browse files</p>
+                        <div class="upload-constraints">
+                            <span><i data-lucide="file-text"></i> PDF files only</span>
+                            <span><i data-lucide="hard-drive"></i> Max 200 MB</span>
+                            <span><i data-lucide="globe"></i> Gujarati documents only</span>
+                        </div>
+                        <input type="file" id="fileInput" accept=".pdf" hidden>
+                    </div>
+
+                    <!-- Gujarati-only disclaimer -->
+                    <div class="options-bar">
+                        <div class="option-group">
+                            <label>
+                                <i data-lucide="info"></i>
+                                Note
+                            </label>
+                            <div class="disclaimer-text">This module currently supports <strong>Gujarati (મુજરાતી)</strong> documents only. Support for Hindi & Marathi coming soon.</div>
+                        </div>
+                        <div class="option-group">
+                            <label>
+                                <i data-lucide="arrow-right"></i>
+                                Translates to
+                            </label>
+                            <div class="target-lang">English</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ─── File Info (shown after file selected) ── -->
+                <section class="section file-info-section hidden" id="fileInfoSection">
+                    <div class="file-card">
+                        <div class="file-icon">
+                            <i data-lucide="file-text"></i>
+                        </div>
+                        <div class="file-details">
+                            <span class="file-name" id="fileName">—</span>
+                            <span class="file-size" id="fileSize">—</span>
+                        </div>
+                        <button class="btn-remove" id="btnRemoveFile" title="Remove file">
+                            <i data-lucide="x"></i>
+                        </button>
+                    </div>
+                    <button class="btn-primary btn-translate" id="btnTranslate">
+                        <i data-lucide="zap"></i>
+                        <span>Translate Document</span>
+                    </button>
+                </section>
+
+                <!-- ─── Progress Section ─────────────────── -->
+                <section class="section progress-section hidden" id="progressSection">
+                    <div class="progress-card">
+                        <div class="progress-header">
+                            <div class="progress-spinner"></div>
+                            <h3 id="progressTitle">Processing…</h3>
+                        </div>
+
+                        <div class="progress-bar-container">
+                            <div class="progress-bar" id="progressBar" style="width: 0%"></div>
+                        </div>
+                        <div class="progress-percentage" id="progressPct">0%</div>
+
+                        <div class="progress-stages">
+                            <div class="stage" id="stageUpload" data-stage="uploading">
+                                <div class="stage-icon"><i data-lucide="upload"></i></div>
+                                <span>Upload</span>
+                            </div>
+                            <div class="stage-connector"></div>
+                            <div class="stage" id="stageExtract" data-stage="extracting">
+                                <div class="stage-icon"><i data-lucide="scan-eye"></i></div>
+                                <span>OCR Extract</span>
+                            </div>
+                            <div class="stage-connector"></div>
+                            <div class="stage" id="stageTranslate" data-stage="translating">
+                                <div class="stage-icon"><i data-lucide="languages"></i></div>
+                                <span>Translate</span>
+                            </div>
+                            <div class="stage-connector"></div>
+                            <div class="stage" id="stageGenerate" data-stage="generating">
+                                <div class="stage-icon"><i data-lucide="file-output"></i></div>
+                                <span>Generate</span>
+                            </div>
+                        </div>
+
+                        <p class="progress-detail" id="progressDetail">Starting…</p>
+                    </div>
+                </section>
+
+                <!-- ─── Completed Section ────────────────── -->
+                <section class="section completed-section hidden" id="completedSection">
+                    <div class="completed-card">
+                        <div class="completed-icon-wrapper">
+                            <div class="completed-checkmark">
+                                <i data-lucide="check-circle-2"></i>
+                            </div>
+                        </div>
+                        <h3>Translation Complete!</h3>
+                        <p class="completed-subtitle">Your documents are ready for download</p>
+
+                        <div class="download-buttons">
+                            <button class="btn-download btn-pdf" id="btnDownloadPdf">
+                                <i data-lucide="file-text"></i>
+                                <div class="btn-download-text">
+                                    <span class="btn-download-label">Download</span>
+                                    <span class="btn-download-format">PDF Document</span>
+                                </div>
+                            </button>
+                            <button class="btn-download btn-rtf" id="btnDownloadRtf">
+                                <i data-lucide="file-type"></i>
+                                <div class="btn-download-text">
+                                    <span class="btn-download-label">Download</span>
+                                    <span class="btn-download-format">RTF Document</span>
+                                </div>
+                            </button>
+                        </div>
+
+                        <!-- Preview Toggle -->
+                        <button class="btn-ghost btn-preview-toggle" id="btnPreviewToggle">
+                            <i data-lucide="eye"></i>
+                            <span>Preview Translation</span>
+                        </button>
+
+                        <div class="preview-area hidden" id="previewArea">
+                            <div class="preview-content" id="previewContent"></div>
+                        </div>
+
+                        <button class="btn-ghost btn-new" id="btnNewTranslation">
+                            <i data-lucide="plus-circle"></i>
+                            <span>Translate Another Document</span>
+                        </button>
+                    </div>
+                </section>
+
+                <!-- ─── Error Section ────────────────────── -->
+                <section class="section error-section hidden" id="errorSection">
+                    <div class="error-card">
+                        <div class="error-icon-wrapper">
+                            <i data-lucide="alert-triangle"></i>
+                        </div>
+                        <h3>Something went wrong</h3>
+                        <p class="error-message" id="errorMessage">—</p>
+                        <button class="btn-primary btn-retry" id="btnRetry">
+                            <i data-lucide="rotate-ccw"></i>
+                            <span>Try Again</span>
+                        </button>
+                    </div>
+                </section>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Scripts -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
