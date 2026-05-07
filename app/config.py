@@ -6,9 +6,9 @@ Loads settings from environment variables (.env file).
 import os
 from dotenv import load_dotenv
 
-# Load .env file from project root
+# Load .env file from project root, overriding any stale session variables
 _env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-load_dotenv(_env_path)
+load_dotenv(_env_path, override=True)
 
 # ── App Identity ──────────────────────────────────────────────
 APP_NAME = "KCM AI Suite"
@@ -22,7 +22,7 @@ SARVAM_TRANSLATE_URL = f"{SARVAM_BASE_URL}/translate"
 
 # ── Google Gemini API (Order Scrutiny) ───────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = "gemini-2.5-pro"
+GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 
 # ── Sarvam Translate Settings ────────────────────────────────
 TRANSLATE_MODEL = "mayura:v1"
