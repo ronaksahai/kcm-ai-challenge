@@ -421,22 +421,71 @@ def _escape_xml(text: str) -> str:
 def _strip_html_to_text(text: str) -> str:
     """
     Convert any embedded HTML (from Sarvam OCR output) to clean plain text.
-    Handles <table>, <tr>, <td>, <th>, <br>, <hr>, and other common tags.
+    Handles broken HTML tables seamlessly.
     """
     import re as _re
 
     # Replace <br>, <br/>, <br /> with newline
     text = _re.sub(r'<br\s*/?>', '\n', text, flags=_re.IGNORECASE)
-
     # Replace <hr>, <hr/>, <hr /> with markdown horizontal rule
     text = _re.sub(r'<hr\s*/?>', '\n---\n', text, flags=_re.IGNORECASE)
 
-    # Handle table rows: extract text from <td> and <th> cells
-    # First, convert </tr> to newline
-    text = _re.sub(r'</tr>', '\n', text, flags=_re.IGNORECASE)
+    tr_blocks = _re.split(r'(?i)<tr[^>]*>', text)
+    new_text_parts = [tr_blocks[0]]
+    in_table = False
+    
+    for block in tr_blocks[1:]:
+        match = _re.search(r'(?i)</tr>|</?(?:table|thead|tbody|tfoot)[^>]*>', block)
+        if match:
+            row_content = block[:match.start()]
+            after_row = block[match.start():]
+        else:
+            row_content = block
+            after_row = ""
+            
+        cell_blocks = _re.split(r'(?i)<t[dh][^>]*>', row_content)
+        clean_cells = []
+        
+        pre_cell_text = _re.sub(r'<[^>]+>', ' ', cell_blocks[0]).strip()
+        
+        for idx, cell_html in enumerate(cell_blocks[1:]):
+            cell_text = _re.split(r'(?i)</t[dh]>', cell_html)[0]
+            clean_str = _re.sub(r'<[^>]+>', ' ', cell_text).strip()
+            
+            if idx == 0 and pre_cell_text:
+                clean_str = pre_cell_text + " " + clean_str
+                
+            clean_str = _re.sub(r'[ \t\n\r]+', ' ', clean_str)
+            clean_str = clean_str.replace('|', '\\|')
+            clean_cells.append(clean_str)
+            
+        if clean_cells:
+            md_row = "| " + " | ".join(clean_cells) + " |"
+            if not in_table:
+                sep = "| " + " | ".join(["---"] * len(clean_cells)) + " |"
+                new_text_parts.append("\n\n" + md_row + "\n" + sep + "\n")
+                in_table = True
+            else:
+                new_text_parts.append(md_row + "\n")
+        else:
+            in_table = False
+            new_text_parts.append("\n" + pre_cell_text + "\n")
+            
+        # Strip structural table tags from after_row
+        after_clean = _re.sub(r'(?i)</?(?:table|thead|tbody|tfoot)[^>]*>', '', after_row)
+        after_clean = _re.sub(r'<!--.*?-->', '', after_clean, flags=_re.DOTALL)
+        
+        if not after_clean.strip():
+            # Only whitespace between this row and the next. Keep it contiguous!
+            after_clean = ""
+        else:
+            # Substantial text means the table broke or ended.
+            in_table = False
+            after_clean = "\n\n" + after_clean.strip() + "\n\n"
+            
+        new_text_parts.append(after_clean)
 
-    # Convert <td> and <th> content — add separator between cells
-    text = _re.sub(r'</t[dh]>\s*<t[dh][^>]*>', ' | ', text, flags=_re.IGNORECASE)
+    text = "".join(new_text_parts)
 
     # Remove all remaining HTML tags
     text = _re.sub(r'<[^>]+>', '', text)
@@ -448,6 +497,11 @@ def _strip_html_to_text(text: str) -> str:
     # Decode HTML entities
     text = text.replace('&amp;', '&')
     text = text.replace('&lt;', '<')
+    text = text.replace('&gt;', '>')
+    text = text.replace('&nbsp;', ' ')
+    text = text.replace('&quot;', '"')
+
+    return text.strip()
     text = text.replace('&gt;', '>')
     text = text.replace('&nbsp;', ' ')
     text = text.replace('&quot;', '"')

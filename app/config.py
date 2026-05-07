@@ -20,6 +20,10 @@ SARVAM_BASE_URL = "https://api.sarvam.ai"
 SARVAM_DOC_INTEL_URL = f"{SARVAM_BASE_URL}/doc-digitization/job/v1"
 SARVAM_TRANSLATE_URL = f"{SARVAM_BASE_URL}/translate"
 
+# ── Google Gemini API (Order Scrutiny) ───────────────────────
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = "gemini-2.5-pro"
+
 # ── Sarvam Translate Settings ────────────────────────────────
 TRANSLATE_MODEL = "mayura:v1"
 TRANSLATE_MODE = "formal"          # formal, modern-colloquial, classic-colloquial

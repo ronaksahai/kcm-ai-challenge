@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="KCM AI Suite — Intelligent document translation for Indian legal documents">
-    <title>{{ app_name }} — Document Translator</title>
+    <meta name="description" content="KCM AI Suite — Intelligent tools for Indian legal and tax documents">
+    <title>{{ app_name }}</title>
 
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -13,6 +13,9 @@
 
     <!-- Lucide Icons CDN -->
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+    <!-- Marked.js CDN for Markdown to HTML -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
     <!-- Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
@@ -36,25 +39,20 @@
 
             <nav class="sidebar-nav">
                 <div class="nav-section-label">MODULES</div>
-                <a href="#" class="nav-item active" id="nav-translator">
+                <a href="#" class="nav-item active" id="nav-translator" data-module="translator">
                     <i data-lucide="languages"></i>
                     <span>Document Translator</span>
                     <div class="nav-active-indicator"></div>
                 </a>
-                <a href="#" class="nav-item disabled" title="Coming Soon">
-                    <i data-lucide="calculator"></i>
-                    <span>Tax Computation</span>
-                    <span class="badge-soon">Soon</span>
+                <a href="#" class="nav-item" id="nav-scrutiny" data-module="scrutiny">
+                    <i data-lucide="file-search"></i>
+                    <span>Order Scrutiny</span>
+                    <div class="nav-active-indicator"></div>
                 </a>
-                <a href="#" class="nav-item disabled" title="Coming Soon">
-                    <i data-lucide="file-check"></i>
-                    <span>Document Verify</span>
-                    <span class="badge-soon">Soon</span>
-                </a>
-                <a href="#" class="nav-item disabled" title="Coming Soon">
-                    <i data-lucide="brain-circuit"></i>
-                    <span>AI Assistant</span>
-                    <span class="badge-soon">Soon</span>
+                <a href="#" class="nav-item" id="nav-noticeReply" data-module="noticeReply">
+                    <i data-lucide="reply"></i>
+                    <span>Notice Reply</span>
+                    <div class="nav-active-indicator"></div>
                 </a>
             </nav>
 
@@ -70,188 +68,563 @@
         <!-- ─── Main Content ─────────────────────────────── -->
         <main class="main-content">
 
-            <!-- Header -->
-            <header class="content-header">
-                <div class="header-left">
-                    <h1>
-                        <i data-lucide="languages" class="header-icon"></i>
-                        Document Translator
-                    </h1>
-                    <p class="header-desc">
-                        Translate scanned Gujarati legal documents to English
-                    </p>
-                </div>
-                <div class="header-right">
-                    <div class="powered-by">
-                        <span>Powered by</span>
-                        <strong>Sarvam AI</strong>
+            <!-- ═══════════════════════════════════════════════
+                 MODULE: Document Translator
+                 ═══════════════════════════════════════════════ -->
+            <div id="translatorModule" class="module-content active">
+
+                <!-- Header -->
+                <header class="content-header">
+                    <div class="header-left">
+                        <h1>
+                            <i data-lucide="languages" class="header-icon"></i>
+                            Document Translator
+                        </h1>
+                        <p class="header-desc">
+                            Translate scanned Gujarati legal documents to English
+                        </p>
                     </div>
-                </div>
-            </header>
-
-            <!-- Content Area -->
-            <div class="content-body">
-
-                <!-- ─── Upload Section ───────────────────── -->
-                <section class="section upload-section" id="uploadSection">
-                    <div class="upload-zone" id="uploadZone">
-                        <div class="upload-icon-wrapper">
-                            <div class="upload-rings">
-                                <div class="ring ring-1"></div>
-                                <div class="ring ring-2"></div>
-                                <div class="ring ring-3"></div>
-                            </div>
-                            <i data-lucide="upload-cloud" class="upload-icon"></i>
-                        </div>
-                        <h3 class="upload-title">Drop your document here</h3>
-                        <p class="upload-subtitle">or click to browse files</p>
-                        <div class="upload-constraints">
-                            <span><i data-lucide="file-text"></i> PDF files only</span>
-                            <span><i data-lucide="hard-drive"></i> Max 200 MB</span>
-                            <span><i data-lucide="globe"></i> Gujarati documents only</span>
-                        </div>
-                        <input type="file" id="fileInput" accept=".pdf" hidden>
-                    </div>
-
-                    <!-- Gujarati-only disclaimer -->
-                    <div class="options-bar">
-                        <div class="option-group">
-                            <label>
-                                <i data-lucide="info"></i>
-                                Note
-                            </label>
-                            <div class="disclaimer-text">This module currently supports <strong>Gujarati (મુજરાતી)</strong> documents only. Support for Hindi & Marathi coming soon.</div>
-                        </div>
-                        <div class="option-group">
-                            <label>
-                                <i data-lucide="arrow-right"></i>
-                                Translates to
-                            </label>
-                            <div class="target-lang">English</div>
+                    <div class="header-right">
+                        <div class="powered-by">
+                            <span>Powered by</span>
+                            <strong>Sarvam AI</strong>
                         </div>
                     </div>
-                </section>
+                </header>
 
-                <!-- ─── File Info (shown after file selected) ── -->
-                <section class="section file-info-section hidden" id="fileInfoSection">
-                    <div class="file-card">
-                        <div class="file-icon">
-                            <i data-lucide="file-text"></i>
-                        </div>
-                        <div class="file-details">
-                            <span class="file-name" id="fileName">—</span>
-                            <span class="file-size" id="fileSize">—</span>
-                        </div>
-                        <button class="btn-remove" id="btnRemoveFile" title="Remove file">
-                            <i data-lucide="x"></i>
-                        </button>
-                    </div>
-                    <button class="btn-primary btn-translate" id="btnTranslate">
-                        <i data-lucide="zap"></i>
-                        <span>Translate Document</span>
-                    </button>
-                </section>
+                <!-- Content Area -->
+                <div class="content-body">
 
-                <!-- ─── Progress Section ─────────────────── -->
-                <section class="section progress-section hidden" id="progressSection">
-                    <div class="progress-card">
-                        <div class="progress-header">
-                            <div class="progress-spinner"></div>
-                            <h3 id="progressTitle">Processing…</h3>
-                        </div>
-
-                        <div class="progress-bar-container">
-                            <div class="progress-bar" id="progressBar" style="width: 0%"></div>
-                        </div>
-                        <div class="progress-percentage" id="progressPct">0%</div>
-
-                        <div class="progress-stages">
-                            <div class="stage" id="stageUpload" data-stage="uploading">
-                                <div class="stage-icon"><i data-lucide="upload"></i></div>
-                                <span>Upload</span>
+                    <!-- ─── Upload Section ───────────────────── -->
+                    <section class="section upload-section" id="uploadSection">
+                        <div class="upload-zone" id="uploadZone">
+                            <div class="upload-icon-wrapper">
+                                <div class="upload-rings">
+                                    <div class="ring ring-1"></div>
+                                    <div class="ring ring-2"></div>
+                                    <div class="ring ring-3"></div>
+                                </div>
+                                <i data-lucide="upload-cloud" class="upload-icon"></i>
                             </div>
-                            <div class="stage-connector"></div>
-                            <div class="stage" id="stageExtract" data-stage="extracting">
-                                <div class="stage-icon"><i data-lucide="scan-eye"></i></div>
-                                <span>OCR Extract</span>
+                            <h3 class="upload-title">Drop your document here</h3>
+                            <p class="upload-subtitle">or click to browse files</p>
+                            <div class="upload-constraints">
+                                <span><i data-lucide="file-text"></i> PDF files only</span>
+                                <span><i data-lucide="hard-drive"></i> Max 200 MB</span>
+                                <span><i data-lucide="globe"></i> Gujarati documents only</span>
                             </div>
-                            <div class="stage-connector"></div>
-                            <div class="stage" id="stageTranslate" data-stage="translating">
-                                <div class="stage-icon"><i data-lucide="languages"></i></div>
-                                <span>Translate</span>
+                            <input type="file" id="fileInput" accept=".pdf" hidden>
+                        </div>
+
+                        <!-- Gujarati-only disclaimer -->
+                        <div class="options-bar">
+                            <div class="option-group">
+                                <label>
+                                    <i data-lucide="info"></i>
+                                    Note
+                                </label>
+                                <div class="disclaimer-text">This module currently supports <strong>Gujarati (મુજરાતી)</strong> documents only. Support for Hindi & Marathi coming soon.</div>
                             </div>
-                            <div class="stage-connector"></div>
-                            <div class="stage" id="stageGenerate" data-stage="generating">
-                                <div class="stage-icon"><i data-lucide="file-output"></i></div>
-                                <span>Generate</span>
+                            <div class="option-group">
+                                <label>
+                                    <i data-lucide="arrow-right"></i>
+                                    Translates to
+                                </label>
+                                <div class="target-lang">English</div>
                             </div>
                         </div>
+                    </section>
 
-                        <p class="progress-detail" id="progressDetail">Starting…</p>
-                    </div>
-                </section>
-
-                <!-- ─── Completed Section ────────────────── -->
-                <section class="section completed-section hidden" id="completedSection">
-                    <div class="completed-card">
-                        <div class="completed-icon-wrapper">
-                            <div class="completed-checkmark">
-                                <i data-lucide="check-circle-2"></i>
-                            </div>
-                        </div>
-                        <h3>Translation Complete!</h3>
-                        <p class="completed-subtitle">Your documents are ready for download</p>
-
-                        <div class="download-buttons">
-                            <button class="btn-download btn-pdf" id="btnDownloadPdf">
+                    <!-- ─── File Info (shown after file selected) ── -->
+                    <section class="section file-info-section hidden" id="fileInfoSection">
+                        <div class="file-card">
+                            <div class="file-icon">
                                 <i data-lucide="file-text"></i>
-                                <div class="btn-download-text">
-                                    <span class="btn-download-label">Download</span>
-                                    <span class="btn-download-format">PDF Document</span>
-                                </div>
-                            </button>
-                            <button class="btn-download btn-rtf" id="btnDownloadRtf">
-                                <i data-lucide="file-type"></i>
-                                <div class="btn-download-text">
-                                    <span class="btn-download-label">Download</span>
-                                    <span class="btn-download-format">RTF Document</span>
-                                </div>
+                            </div>
+                            <div class="file-details">
+                                <span class="file-name" id="fileName">—</span>
+                                <span class="file-size" id="fileSize">—</span>
+                            </div>
+                            <button class="btn-remove" id="btnRemoveFile" title="Remove file">
+                                <i data-lucide="x"></i>
                             </button>
                         </div>
-
-                        <!-- Preview Toggle -->
-                        <button class="btn-ghost btn-preview-toggle" id="btnPreviewToggle">
-                            <i data-lucide="eye"></i>
-                            <span>Preview Translation</span>
+                        <button class="btn-primary btn-translate" id="btnTranslate">
+                            <i data-lucide="zap"></i>
+                            <span>Translate Document</span>
                         </button>
+                    </section>
 
-                        <div class="preview-area hidden" id="previewArea">
-                            <div class="preview-content" id="previewContent"></div>
+                    <!-- ─── Progress Section ─────────────────── -->
+                    <section class="section progress-section hidden" id="progressSection">
+                        <div class="progress-card">
+                            <div class="progress-header">
+                                <div class="progress-spinner"></div>
+                                <h3 id="progressTitle">Processing…</h3>
+                            </div>
+
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" id="progressBar" style="width: 0%"></div>
+                            </div>
+                            <div class="progress-percentage" id="progressPct">0%</div>
+
+                            <div class="progress-stages">
+                                <div class="stage" id="stageUpload" data-stage="uploading">
+                                    <div class="stage-icon"><i data-lucide="upload"></i></div>
+                                    <span>Upload</span>
+                                </div>
+                                <div class="stage-connector"></div>
+                                <div class="stage" id="stageExtract" data-stage="extracting">
+                                    <div class="stage-icon"><i data-lucide="scan-eye"></i></div>
+                                    <span>OCR Extract</span>
+                                </div>
+                                <div class="stage-connector"></div>
+                                <div class="stage" id="stageTranslate" data-stage="translating">
+                                    <div class="stage-icon"><i data-lucide="languages"></i></div>
+                                    <span>Translate</span>
+                                </div>
+                                <div class="stage-connector"></div>
+                                <div class="stage" id="stageGenerate" data-stage="generating">
+                                    <div class="stage-icon"><i data-lucide="file-output"></i></div>
+                                    <span>Generate</span>
+                                </div>
+                            </div>
+
+                            <p class="progress-detail" id="progressDetail">Starting…</p>
                         </div>
+                    </section>
 
-                        <button class="btn-ghost btn-new" id="btnNewTranslation">
-                            <i data-lucide="plus-circle"></i>
-                            <span>Translate Another Document</span>
-                        </button>
-                    </div>
-                </section>
+                    <!-- ─── Completed Section ────────────────── -->
+                    <section class="section completed-section hidden" id="completedSection">
+                        <div class="completed-card">
+                            <div class="completed-icon-wrapper">
+                                <div class="completed-checkmark">
+                                    <i data-lucide="check-circle-2"></i>
+                                </div>
+                            </div>
+                            <h3>Translation Complete!</h3>
+                            <p class="completed-subtitle">Your documents are ready for download</p>
 
-                <!-- ─── Error Section ────────────────────── -->
-                <section class="section error-section hidden" id="errorSection">
-                    <div class="error-card">
-                        <div class="error-icon-wrapper">
-                            <i data-lucide="alert-triangle"></i>
+                            <div class="download-buttons">
+                                <button class="btn-download btn-pdf" id="btnDownloadPdf">
+                                    <i data-lucide="file-text"></i>
+                                    <div class="btn-download-text">
+                                        <span class="btn-download-label">Download</span>
+                                        <span class="btn-download-format">PDF Document</span>
+                                    </div>
+                                </button>
+                                <button class="btn-download btn-rtf" id="btnDownloadRtf">
+                                    <i data-lucide="file-type"></i>
+                                    <div class="btn-download-text">
+                                        <span class="btn-download-label">Download</span>
+                                        <span class="btn-download-format">RTF Document</span>
+                                    </div>
+                                </button>
+                            </div>
+
+                            <!-- Preview Toggle -->
+                            <button class="btn-ghost btn-preview-toggle" id="btnPreviewToggle">
+                                <i data-lucide="eye"></i>
+                                <span>Preview Translation</span>
+                            </button>
+
+                            <div class="preview-area hidden" id="previewArea">
+                                <div class="preview-content" id="previewContent"></div>
+                            </div>
+
+                            <button class="btn-ghost btn-new" id="btnNewTranslation">
+                                <i data-lucide="plus-circle"></i>
+                                <span>Translate Another Document</span>
+                            </button>
                         </div>
-                        <h3>Something went wrong</h3>
-                        <p class="error-message" id="errorMessage">—</p>
-                        <button class="btn-primary btn-retry" id="btnRetry">
-                            <i data-lucide="rotate-ccw"></i>
-                            <span>Try Again</span>
-                        </button>
-                    </div>
-                </section>
+                    </section>
 
+                    <!-- ─── Error Section ────────────────────── -->
+                    <section class="section error-section hidden" id="errorSection">
+                        <div class="error-card">
+                            <div class="error-icon-wrapper">
+                                <i data-lucide="alert-triangle"></i>
+                            </div>
+                            <h3>Something went wrong</h3>
+                            <p class="error-message" id="errorMessage">—</p>
+                            <button class="btn-primary btn-retry" id="btnRetry">
+                                <i data-lucide="rotate-ccw"></i>
+                                <span>Try Again</span>
+                            </button>
+                        </div>
+                    </section>
+
+                </div>
             </div>
+
+
+            <!-- ═══════════════════════════════════════════════
+                 MODULE: Order Scrutiny
+                 ═══════════════════════════════════════════════ -->
+            <div id="scrutinyModule" class="module-content">
+
+                <!-- Header -->
+                <header class="content-header">
+                    <div class="header-left">
+                        <h1>
+                            <i data-lucide="file-search" class="header-icon"></i>
+                            Order Scrutiny
+                        </h1>
+                        <p class="header-desc">
+                            Compare Assessment Order computation with ROI and Intimation u/s 143(1)
+                        </p>
+                    </div>
+                    <div class="header-right">
+                        <div class="powered-by">
+                            <span>Powered by</span>
+                            <strong>Gemini AI</strong>
+                        </div>
+                    </div>
+                </header>
+
+                <div class="content-body">
+
+                    <!-- ─── Scrutiny Upload Section ───────────── -->
+                    <section class="section" id="scrutinyUploadSection">
+
+                        <div class="scrutiny-upload-grid">
+
+                            <!-- Card 1: Computation Sheet -->
+                            <div class="scrutiny-upload-card" id="compCard">
+                                <div class="suc-header">
+                                    <div class="suc-icon"><i data-lucide="file-spreadsheet"></i></div>
+                                    <div class="suc-info">
+                                        <h4>Computation Sheet</h4>
+                                        <span class="suc-badge suc-required">Required</span>
+                                    </div>
+                                </div>
+                                <p class="suc-desc">Computation sheet as given by the AO along with the assessment order</p>
+                                <div class="suc-dropzone" id="compDropzone">
+                                    <i data-lucide="upload-cloud"></i>
+                                    <span>Drop PDF or click to browse</span>
+                                    <input type="file" accept=".pdf" id="compFileInput" hidden>
+                                </div>
+                                <div class="suc-file-display hidden" id="compFileDisplay">
+                                    <i data-lucide="file-check"></i>
+                                    <span class="suc-file-name" id="compFileName">—</span>
+                                    <button class="suc-remove" id="compRemove" title="Remove"><i data-lucide="x"></i></button>
+                                </div>
+                            </div>
+
+                            <!-- Card 2: Intimation Order -->
+                            <div class="scrutiny-upload-card" id="intimCard">
+                                <div class="suc-header">
+                                    <div class="suc-icon"><i data-lucide="shield-check"></i></div>
+                                    <div class="suc-info">
+                                        <h4>Intimation u/s 143(1)</h4>
+                                        <span class="suc-badge suc-required">Required</span>
+                                    </div>
+                                </div>
+                                <p class="suc-desc">Intimation from the Income Tax department (password protected)</p>
+                                <div class="suc-dropzone" id="intimDropzone">
+                                    <i data-lucide="upload-cloud"></i>
+                                    <span>Drop PDF or click to browse</span>
+                                    <input type="file" accept=".pdf" id="intimFileInput" hidden>
+                                </div>
+                                <div class="suc-file-display hidden" id="intimFileDisplay">
+                                    <i data-lucide="file-check"></i>
+                                    <span class="suc-file-name" id="intimFileName">—</span>
+                                    <button class="suc-remove" id="intimRemove" title="Remove"><i data-lucide="x"></i></button>
+                                </div>
+                                <div class="suc-password-group">
+                                    <label for="intimPassword"><i data-lucide="lock"></i> PDF Password</label>
+                                    <input type="password" id="intimPassword" placeholder="Enter intimation PDF password" autocomplete="off">
+                                </div>
+                            </div>
+
+                            <!-- Card 3: Assessment Order -->
+                            <div class="scrutiny-upload-card suc-optional" id="aoCard">
+                                <div class="suc-header">
+                                    <div class="suc-icon suc-icon-optional"><i data-lucide="file-text"></i></div>
+                                    <div class="suc-info">
+                                        <h4>Assessment Order</h4>
+                                        <span class="suc-badge suc-optional-badge">Optional</span>
+                                    </div>
+                                </div>
+                                <p class="suc-desc">Assessment order u/s 143(3) for extracting specific additions by AO</p>
+                                <div class="suc-dropzone" id="aoDropzone">
+                                    <i data-lucide="upload-cloud"></i>
+                                    <span>Drop PDF or click to browse</span>
+                                    <input type="file" accept=".pdf" id="aoFileInput" hidden>
+                                </div>
+                                <div class="suc-file-display hidden" id="aoFileDisplay">
+                                    <i data-lucide="file-check"></i>
+                                    <span class="suc-file-name" id="aoFileName">—</span>
+                                    <button class="suc-remove" id="aoRemove" title="Remove"><i data-lucide="x"></i></button>
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <div class="scrutiny-action-bar">
+                            <button class="btn-primary btn-generate-scrutiny" id="btnGenerateScrutiny" disabled>
+                                <i data-lucide="zap"></i>
+                                <span>Generate Order Scrutiny</span>
+                            </button>
+                        </div>
+
+                    </section>
+
+                    <!-- ─── Scrutiny Progress ────────────────── -->
+                    <section class="section hidden" id="scrutinyProgressSection">
+                        <div class="progress-card">
+                            <div class="progress-header">
+                                <div class="progress-spinner"></div>
+                                <h3 id="scrutinyProgressTitle">Processing…</h3>
+                            </div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" id="scrutinyProgressBar" style="width: 0%"></div>
+                            </div>
+                            <div class="progress-percentage" id="scrutinyProgressPct">0%</div>
+                            <div class="progress-stages">
+                                <div class="stage active" data-stage="uploading">
+                                    <div class="stage-icon"><i data-lucide="upload"></i></div>
+                                    <span>Upload</span>
+                                </div>
+                                <div class="stage-connector"></div>
+                                <div class="stage" data-stage="extracting">
+                                    <div class="stage-icon"><i data-lucide="scan-eye"></i></div>
+                                    <span>Extract Data</span>
+                                </div>
+                                <div class="stage-connector"></div>
+                                <div class="stage" data-stage="generating">
+                                    <div class="stage-icon"><i data-lucide="file-output"></i></div>
+                                    <span>Generate Excel</span>
+                                </div>
+                            </div>
+                            <p class="progress-detail" id="scrutinyProgressDetail">Starting…</p>
+                        </div>
+                    </section>
+
+                    <!-- ─── Scrutiny Complete ────────────────── -->
+                    <section class="section hidden" id="scrutinyCompletedSection">
+                        <div class="completed-card">
+                            <div class="completed-icon-wrapper">
+                                <div class="completed-checkmark">
+                                    <i data-lucide="check-circle-2"></i>
+                                </div>
+                            </div>
+                            <h3>Order Scrutiny Complete!</h3>
+                            <p class="completed-subtitle">Your Excel comparison sheet is ready</p>
+                            <div class="download-buttons">
+                                <button class="btn-download btn-excel" id="btnDownloadExcel">
+                                    <i data-lucide="file-spreadsheet"></i>
+                                    <div class="btn-download-text">
+                                        <span class="btn-download-label">Download</span>
+                                        <span class="btn-download-format">Excel Workbook (.xlsx)</span>
+                                    </div>
+                                </button>
+                            </div>
+                            <button class="btn-ghost btn-new" id="btnNewScrutiny">
+                                <i data-lucide="plus-circle"></i>
+                                <span>New Order Scrutiny</span>
+                            </button>
+                        </div>
+                    </section>
+
+                    <!-- ─── Scrutiny Error ───────────────────── -->
+                    <section class="section hidden" id="scrutinyErrorSection">
+                        <div class="error-card">
+                            <div class="error-icon-wrapper">
+                                <i data-lucide="alert-triangle"></i>
+                            </div>
+                            <h3>Something went wrong</h3>
+                            <p class="error-message" id="scrutinyErrorMessage">—</p>
+                            <button class="btn-primary btn-retry" id="btnScrutinyRetry">
+                                <i data-lucide="rotate-ccw"></i>
+                                <span>Try Again</span>
+                            </button>
+                        </div>
+                    </section>
+
+                </div>
+            </div>
+
+
+            <!-- ═══════════════════════════════════════════════
+                 MODULE: Notice Reply
+                 ═══════════════════════════════════════════════ -->
+            <div id="noticeReplyModule" class="module-content">
+
+                <!-- Header -->
+                <header class="content-header">
+                    <div class="header-left">
+                        <h1>
+                            <i data-lucide="reply" class="header-icon"></i>
+                            Notice Reply
+                        </h1>
+                        <p class="header-desc">
+                            Draft reply skeletons for Income Tax Department notices
+                        </p>
+                    </div>
+                    <div class="header-right">
+                        <div class="powered-by">
+                            <span>Powered by</span>
+                            <strong>Gemini AI</strong>
+                        </div>
+                    </div>
+                </header>
+
+                <div class="content-body">
+
+                    <!-- ─── Notice Upload Section ──────────────── -->
+                    <section class="section" id="noticeUploadSection">
+                        <div class="upload-zone" id="noticeUploadZone">
+                            <div class="upload-icon-wrapper">
+                                <div class="upload-rings">
+                                    <div class="ring ring-1"></div>
+                                    <div class="ring ring-2"></div>
+                                    <div class="ring ring-3"></div>
+                                </div>
+                                <i data-lucide="upload-cloud" class="upload-icon"></i>
+                            </div>
+                            <h3 class="upload-title">Drop your notice PDF here</h3>
+                            <p class="upload-subtitle">or click to browse files</p>
+                            <div class="upload-constraints">
+                                <span><i data-lucide="file-text"></i> PDF files only</span>
+                                <span><i data-lucide="hard-drive"></i> Max 200 MB</span>
+                                <span><i data-lucide="shield"></i> IT Dept notices</span>
+                            </div>
+                            <input type="file" id="noticeFileInput" accept=".pdf" hidden>
+                        </div>
+
+                        <div class="options-bar">
+                            <div class="option-group">
+                                <label>
+                                    <i data-lucide="info"></i>
+                                    How it works
+                                </label>
+                                <div class="disclaimer-text">Upload a notice from the Income Tax Department. The app will generate a <strong>reply skeleton</strong> (Word), a <strong>Details Required</strong> sheet (Excel), and a <strong>client email</strong> message.</div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- ─── Notice File Info ────────────────────── -->
+                    <section class="section file-info-section hidden" id="noticeFileInfoSection">
+                        <div class="file-card">
+                            <div class="file-icon">
+                                <i data-lucide="file-text"></i>
+                            </div>
+                            <div class="file-details">
+                                <span class="file-name" id="noticeFileName">—</span>
+                                <span class="file-size" id="noticeFileSize">—</span>
+                            </div>
+                            <button class="btn-remove" id="btnRemoveNotice" title="Remove file">
+                                <i data-lucide="x"></i>
+                            </button>
+                        </div>
+                        <button class="btn-primary btn-translate" id="btnGenerateReply">
+                            <i data-lucide="zap"></i>
+                            <span>Generate Notice Reply</span>
+                        </button>
+                    </section>
+
+                    <!-- ─── Notice Progress ─────────────────────── -->
+                    <section class="section hidden" id="noticeProgressSection">
+                        <div class="progress-card">
+                            <div class="progress-header">
+                                <div class="progress-spinner"></div>
+                                <h3 id="noticeProgressTitle">Processing…</h3>
+                            </div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" id="noticeProgressBar" style="width: 0%"></div>
+                            </div>
+                            <div class="progress-percentage" id="noticeProgressPct">0%</div>
+                            <div class="progress-stages">
+                                <div class="stage active" data-stage="uploading">
+                                    <div class="stage-icon"><i data-lucide="upload"></i></div>
+                                    <span>Upload</span>
+                                </div>
+                                <div class="stage-connector"></div>
+                                <div class="stage" data-stage="analyzing">
+                                    <div class="stage-icon"><i data-lucide="brain"></i></div>
+                                    <span>Analyze Notice</span>
+                                </div>
+                                <div class="stage-connector"></div>
+                                <div class="stage" data-stage="generating">
+                                    <div class="stage-icon"><i data-lucide="file-output"></i></div>
+                                    <span>Generate Files</span>
+                                </div>
+                            </div>
+                            <p class="progress-detail" id="noticeProgressDetail">Starting…</p>
+                        </div>
+                    </section>
+
+                    <!-- ─── Notice Complete ──────────────────────── -->
+                    <section class="section hidden" id="noticeCompletedSection">
+                        <div class="completed-card">
+                            <div class="completed-icon-wrapper">
+                                <div class="completed-checkmark">
+                                    <i data-lucide="check-circle-2"></i>
+                                </div>
+                            </div>
+                            <h3>Notice Reply Complete!</h3>
+                            <p class="completed-subtitle">Your reply skeleton and details sheet are ready</p>
+
+                            <div class="download-buttons">
+                                <button class="btn-download btn-pdf" id="btnDownloadReplyDocx">
+                                    <i data-lucide="file-text"></i>
+                                    <div class="btn-download-text">
+                                        <span class="btn-download-label">Download</span>
+                                        <span class="btn-download-format">Reply Skeleton (.docx)</span>
+                                    </div>
+                                </button>
+                                <button class="btn-download btn-excel" id="btnDownloadDetailsXlsx">
+                                    <i data-lucide="file-spreadsheet"></i>
+                                    <div class="btn-download-text">
+                                        <span class="btn-download-label">Download</span>
+                                        <span class="btn-download-format">Details Required (.xlsx)</span>
+                                    </div>
+                                </button>
+                            </div>
+
+                            <!-- Client Email Preview -->
+                            <button class="btn-ghost btn-preview-toggle" id="btnEmailToggle">
+                                <i data-lucide="mail"></i>
+                                <span>Show Client Email Message</span>
+                            </button>
+
+                            <div class="email-preview-area hidden" id="emailPreviewArea">
+                                <div class="email-preview-header">
+                                    <span class="email-preview-label">Client Email Message</span>
+                                    <button class="btn-copy" id="btnCopyEmail" title="Copy to clipboard">
+                                        <i data-lucide="copy"></i>
+                                        <span>Copy</span>
+                                    </button>
+                                </div>
+                                <pre class="email-preview-content" id="emailPreviewContent"></pre>
+                            </div>
+
+                            <button class="btn-ghost btn-new" id="btnNewNoticeReply">
+                                <i data-lucide="plus-circle"></i>
+                                <span>Draft Another Reply</span>
+                            </button>
+                        </div>
+                    </section>
+
+                    <!-- ─── Notice Error ─────────────────────────── -->
+                    <section class="section hidden" id="noticeErrorSection">
+                        <div class="error-card">
+                            <div class="error-icon-wrapper">
+                                <i data-lucide="alert-triangle"></i>
+                            </div>
+                            <h3>Something went wrong</h3>
+                            <p class="error-message" id="noticeErrorMessage">—</p>
+                            <button class="btn-primary btn-retry" id="btnNoticeRetry">
+                                <i data-lucide="rotate-ccw"></i>
+                                <span>Try Again</span>
+                            </button>
+                        </div>
+                    </section>
+
+                </div>
+            </div>
+
         </main>
     </div>
 

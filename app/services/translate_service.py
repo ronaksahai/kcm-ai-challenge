@@ -45,6 +45,10 @@ def translate_markdown(
 
     logger.info(f"Translating from Gujarati (gu-IN) to English (en-IN)")
 
+    # Strip massive base64 embedded images from markdown (prevents API 500 errors)
+    markdown_text = re.sub(r'!\[.*?\]\(data:image\/.*?;base64,[a-zA-Z0-9\+\/]+={0,2}\)', '', markdown_text)
+    markdown_text = re.sub(r'<img[^>]+src="data:image\/.*?;base64,[a-zA-Z0-9\+\/]+={0,2}"[^>]*>', '', markdown_text, flags=re.IGNORECASE)
+
     # Parse markdown into translatable segments
     segments = _parse_markdown_segments(markdown_text)
     total_segments = len([s for s in segments if s["translatable"]])
