@@ -5,3 +5,6 @@ __pycache__/
 .DS_Store
 SampleData/
 app/data/output/
+crashed_extracted.md
+pdf_inspection.txt
+server_text.md
