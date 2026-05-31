@@ -271,7 +271,7 @@
                             Order Scrutiny
                         </h1>
                         <p class="header-desc">
-                            Compare Assessment Order computation with ROI and Intimation u/s 143(1)
+                            Compare Assessment Order, Intimation u/s 143(1), and CIT(A) u/s 250 proceedings
                         </p>
                     </div>
                     <div class="header-right">
@@ -316,11 +316,11 @@
                                 <div class="suc-header">
                                     <div class="suc-icon"><i data-lucide="shield-check"></i></div>
                                     <div class="suc-info">
-                                        <h4>Intimation u/s 143(1)</h4>
+                                        <h4>Intimation Order / ITR</h4>
                                         <span class="suc-badge suc-required">Required</span>
                                     </div>
                                 </div>
-                                <p class="suc-desc">Intimation from the Income Tax department (password protected)</p>
+                                <p class="suc-desc">Intimation from the IT Dept, or an ITR. (ITR doesn't need password)</p>
                                 <div class="suc-dropzone" id="intimDropzone">
                                     <i data-lucide="upload-cloud"></i>
                                     <span>Drop PDF or click to browse</span>
@@ -332,21 +332,21 @@
                                     <button class="suc-remove" id="intimRemove" title="Remove"><i data-lucide="x"></i></button>
                                 </div>
                                 <div class="suc-password-group">
-                                    <label for="intimPassword"><i data-lucide="lock"></i> PDF Password</label>
-                                    <input type="password" id="intimPassword" placeholder="Enter intimation PDF password" autocomplete="off">
+                                    <label for="intimPassword"><i data-lucide="lock"></i> PDF Password (Optional for ITR)</label>
+                                    <input type="password" id="intimPassword" placeholder="Enter password if applicable" autocomplete="off">
                                 </div>
                             </div>
 
-                            <!-- Card 3: Assessment Order -->
-                            <div class="scrutiny-upload-card suc-optional" id="aoCard">
+                            <!-- Card 3: Assessment Order (Required) -->
+                            <div class="scrutiny-upload-card" id="aoCard">
                                 <div class="suc-header">
-                                    <div class="suc-icon suc-icon-optional"><i data-lucide="file-text"></i></div>
+                                    <div class="suc-icon"><i data-lucide="file-text"></i></div>
                                     <div class="suc-info">
                                         <h4>Assessment Order</h4>
-                                        <span class="suc-badge suc-optional-badge">Optional</span>
+                                        <span class="suc-badge suc-required">Required</span>
                                     </div>
                                 </div>
-                                <p class="suc-desc">Assessment order u/s 143(3) for extracting specific additions by AO</p>
+                                <p class="suc-desc">Assessment order u/s 143(3) — required for extracting additions by the AO</p>
                                 <div class="suc-dropzone" id="aoDropzone">
                                     <i data-lucide="upload-cloud"></i>
                                     <span>Drop PDF or click to browse</span>
@@ -356,6 +356,28 @@
                                     <i data-lucide="file-check"></i>
                                     <span class="suc-file-name" id="aoFileName">—</span>
                                     <button class="suc-remove" id="aoRemove" title="Remove"><i data-lucide="x"></i></button>
+                                </div>
+                            </div>
+
+                            <!-- Card 4: CIT(A) Order (Optional) -->
+                            <div class="scrutiny-upload-card suc-optional" id="citaCard">
+                                <div class="suc-header">
+                                    <div class="suc-icon suc-icon-optional"><i data-lucide="gavel"></i></div>
+                                    <div class="suc-info">
+                                        <h4>CIT(A) Order u/s 250</h4>
+                                        <span class="suc-badge suc-optional-badge">Optional</span>
+                                    </div>
+                                </div>
+                                <p class="suc-desc">CIT(A) appeal order — analyses which grounds are allowed, dismissed, or set aside</p>
+                                <div class="suc-dropzone" id="citaDropzone">
+                                    <i data-lucide="upload-cloud"></i>
+                                    <span>Drop PDF or click to browse</span>
+                                    <input type="file" accept=".pdf" id="citaFileInput" hidden>
+                                </div>
+                                <div class="suc-file-display hidden" id="citaFileDisplay">
+                                    <i data-lucide="file-check"></i>
+                                    <span class="suc-file-name" id="citaFileName">—</span>
+                                    <button class="suc-remove" id="citaRemove" title="Remove"><i data-lucide="x"></i></button>
                                 </div>
                             </div>
 

@@ -88,6 +88,8 @@ def _extract_english_pages(pdf_path: str, password: str) -> str:
     """Extract only English pages from Intimation PDF (skip Hindi)."""
     reader = PyPDF2.PdfReader(pdf_path)
     if reader.is_encrypted:
+        if not password:
+            raise ValueError("PDF is encrypted. Please provide the password.")
         reader.decrypt(password)
     pages = []
     for i, page in enumerate(reader.pages):
@@ -117,18 +119,23 @@ Required JSON keys:
   "income_business_profession": number,
   "income_capital_gains": number,
   "income_other_sources": number,
+  "current_year_loss_setoff": number,
+  "brought_forward_loss_setoff": number,
   "gross_total_income": number,
   "deduction_part_b": number,
   "deduction_part_c": number,
   "total_deductions_via": number,
   "deduction_10aa": number,
   "total_income": number,
+  "loss_carried_forward": number,
   "income_special_rates": number,
   "income_normal_rates": number,
   "tax_normal_rates": number,
   "tax_115bbe": number,
   "tax_special_other": number,
   "tax_on_total_income": number,
+  "income_115jb": number,
+  "tax_115jb": number,
   "surcharge_total": number,
   "cess": number,
   "gross_tax_liability": number,
@@ -181,12 +188,14 @@ def extract_computation_sheet(pdf_path: str, progress_cb=None) -> dict:
 
 # ── Intimation Order Extraction ──────────────────────────────
 
-INTIMATION_PROMPT = """You are an Indian Income Tax expert. Extract data from this Intimation u/s 143(1) PDF text.
-The document has two columns: "As provided by Taxpayer" (ROI) and "As Computed u/s 143(1)".
+INTIMATION_PROMPT = """You are an Indian Income Tax expert. Extract data from this Intimation u/s 143(1) OR Income Tax Return (ITR) PDF text.
+If the document is an Intimation Order, it has two columns: "As provided by Taxpayer" (ROI) and "As Computed u/s 143(1)".
+If the document is an ITR, it only has the return of income details. In this case, set "is_itr" to true, populate the "roi" object, and leave "computed" as null or empty.
 Return a JSON object. Use plain numbers (no commas). Use 0 for missing/blank/N/A values.
 
 Required JSON keys:
 {
+  "is_itr": "boolean (true if this is an ITR, false if it's an Intimation)",
   "entity_name": "string",
   "pan": "string",
   "assessment_year": "string",
@@ -197,14 +206,19 @@ Required JSON keys:
     "income_business_profession": number,
     "income_capital_gains": number,
     "income_other_sources": number,
+    "current_year_loss_setoff": number,
+    "brought_forward_loss_setoff": number,
     "gross_total_income": number,
     "deduction_part_b": number,
     "deduction_part_c": number,
     "total_deductions_via": number,
     "deduction_10aa": number,
     "total_income": number,
+    "loss_carried_forward": number,
     "tax_normal_rates": number,
     "tax_on_total_income": number,
+    "income_115jb": number,
+    "tax_115jb": number,
     "surcharge_total": number,
     "cess": number,
     "gross_tax_liability": number,
@@ -212,6 +226,7 @@ Required JSON keys:
     "interest_234a": number,
     "interest_234b": number,
     "interest_234c": number,
+    "interest_234d": number,
     "fee_234f": number,
     "total_interest_fee": number,
     "aggregate_liability": number,
@@ -228,14 +243,19 @@ Required JSON keys:
     "income_business_profession": number,
     "income_capital_gains": number,
     "income_other_sources": number,
+    "current_year_loss_setoff": number,
+    "brought_forward_loss_setoff": number,
     "gross_total_income": number,
     "deduction_part_b": number,
     "deduction_part_c": number,
     "total_deductions_via": number,
     "deduction_10aa": number,
     "total_income": number,
+    "loss_carried_forward": number,
     "tax_normal_rates": number,
     "tax_on_total_income": number,
+    "income_115jb": number,
+    "tax_115jb": number,
     "surcharge_total": number,
     "cess": number,
     "gross_tax_liability": number,
@@ -243,6 +263,7 @@ Required JSON keys:
     "interest_234a": number,
     "interest_234b": number,
     "interest_234c": number,
+    "interest_234d": number,
     "fee_234f": number,
     "total_interest_fee": number,
     "aggregate_liability": number,
@@ -273,11 +294,18 @@ def extract_intimation_order(pdf_path: str, password: str, progress_cb=None) -> 
     if progress_cb:
         progress_cb("extracting", "Reading Intimation Order...", 0.3)
 
-    text = _extract_english_pages(pdf_path, password)
-    if not text.strip():
-        # Fallback: try all pages
-        text = _extract_pdf_text(pdf_path, password)
-    logger.info(f"Intimation Order: extracted {len(text)} chars (English pages)")
+    # Extract all text to check if it's an ITR
+    full_text = _extract_pdf_text(pdf_path, password)
+    
+    if "INDIAN INCOME TAX RETURN" in full_text.upper()[:2000] or "ITR" in full_text[:1000] or "PART A-GEN" in full_text.upper()[:1000]:
+        text = full_text
+        logger.info(f"ITR detected: extracted {len(text)} chars")
+    else:
+        text = _extract_english_pages(pdf_path, password)
+        if not text.strip():
+            # Fallback: try all pages
+            text = full_text
+        logger.info(f"Intimation Order: extracted {len(text)} chars (English pages)")
 
     if progress_cb:
         progress_cb("extracting", "Parsing Intimation Order with AI...", 0.4)
@@ -287,36 +315,121 @@ def extract_intimation_order(pdf_path: str, password: str, progress_cb=None) -> 
     return data
 
 
-# ── Assessment Order Extraction (Optional) ───────────────────
+# ── Assessment Order Extraction (Required) ───────────────────
 
-AO_PROMPT = """You are an Indian Income Tax expert. Extract the additions/disallowances made by the Assessing Officer from this Assessment Order PDF.
+AO_PROMPT = """You are an Indian Income Tax expert. Extract structured data from this Assessment Order PDF.
+
+The Assessment Order typically contains a "Final Table of Taxable Computation" or similar computation sheet at the end.
+This table lists the income as per return, adjustments, and the total assessed income.
+
 Return a JSON object with:
 {
-  "additions": [
-    {"description": "string describing the addition", "amount": number, "section": "relevant IT section if any"}
-  ],
   "entity_name": "string",
-  "assessment_year": "string"
+  "assessment_year": "string (e.g. 2016-17)",
+  "order_date": "string (DD/MM/YYYY)",
+  "order_section": "string (e.g. 143(3))",
+  "total_assessed_income": number,
+  "income_as_per_return": number,
+  "additions": [
+    {
+      "description": "string - the exact description of the addition/variation as stated in the order",
+      "amount": number,
+      "section": "relevant IT section if mentioned (e.g. 43B, 40(a)(ia), 32, etc.)",
+      "head_of_income": "which head of income this addition falls under: House Property / Business or Profession / Capital Gains / Other Sources"
+    }
+  ]
 }
 
-Only include actual additions/disallowances with non-zero amounts.
-Parse Indian numbers: 42,24,669 = 4224669
+Instructions:
+- In "additions", include EVERY addition/variation/disallowance listed in the computation table of the order, with non-zero amounts.
+- "description" should capture the exact wording (e.g. "Variation in respect of issue of Disallowance u/s 43B")
+- "head_of_income" should be the income head under which this addition falls. Most additions fall under "Business or Profession".
+- "amount" should be a plain number without commas
+- Parse Indian number format: 1,02,25,077 = 10225077, 1,85,20,733 = 18520733
+- Do NOT include totals or sub-totals as additions — only individual items
 
 PDF Text:
 """
 
 
 def extract_assessment_order(pdf_path: str, progress_cb=None) -> dict:
-    """Extract additions from Assessment Order PDF (optional)."""
+    """Extract additions and computation table from Assessment Order PDF."""
     if progress_cb:
-        progress_cb("extracting", "Reading Assessment Order...", 0.5)
+        progress_cb("extracting", "Reading Assessment Order...", 0.45)
 
     text = _extract_pdf_text(pdf_path)
     logger.info(f"Assessment Order: extracted {len(text)} chars")
 
     if progress_cb:
-        progress_cb("extracting", "Parsing Assessment Order with AI...", 0.55)
+        progress_cb("extracting", "Parsing Assessment Order with AI...", 0.50)
 
     data = _ask_gemini(AO_PROMPT + text)
     logger.info(f"Assessment Order parsed: {len(data.get('additions', []))} additions found")
+    return data
+
+
+# ── CIT(A) Order Extraction (Optional) ──────────────────────
+
+CITA_PROMPT = """You are an Indian Income Tax expert. Analyze this CIT(A) order passed under section 250 of the Income Tax Act.
+
+The CIT(A) order addresses an appeal filed by the Assessee against the Assessment Order. The order discusses each ground of appeal raised by the Assessee and gives a decision on each.
+
+IMPORTANT CONCEPTS:
+- "Allowed" or "Allowed in favour of assessee" = The addition made by the AO is DELETED. The assessee gets full relief.
+- "Dismissed" = The addition made by the AO is UPHELD. No relief to assessee.
+- "Partly allowed" = The addition is partially reduced. The assessee gets partial relief.
+- "Allowed for statistical purpose" or "Set aside" or "Remanded back to AO" = The issue is sent back to the Assessing Officer for fresh examination. The addition STAYS AS-IS until the AO completes the fresh proceedings. Relief amount is 0.
+
+Return a JSON object with:
+{
+  "entity_name": "string",
+  "assessment_year": "string (e.g. 2016-17)",
+  "order_date": "string (DD/MM/YYYY)",
+  "appeal_number": "string",
+  "grounds": [
+    {
+      "ground_no": "string (e.g. 1, 2, 3, or 1.1, 1.2 etc.)",
+      "description": "string - concise description of the ground/issue",
+      "addition_description": "string - the corresponding addition from the assessment order that this ground relates to",
+      "addition_amount": number (the original addition amount by AO),
+      "status": "allowed" | "dismissed" | "partly_allowed" | "allowed_for_statistical_purpose",
+      "relief_amount": number (amount of relief granted; 0 if dismissed or set aside; full amount if allowed; partial if partly_allowed),
+      "section": "relevant IT section if mentioned (e.g. 43B, 40(a)(ia), 32, etc.)",
+      "remarks": "Brief 1-2 line summary of CIT(A)'s reasoning/decision"
+    }
+  ],
+  "total_relief": number (sum of all relief_amount),
+  "total_additions_by_ao": number (sum of all addition_amount),
+  "assessed_income_after_cita": number (if determinable from the order)
+}
+
+Instructions:
+- Read the ENTIRE order thoroughly. Each ground must be analyzed individually.
+- General grounds (like "The order of the AO is erroneous" or "The CIT(A) erred in...") that don't relate to a specific monetary addition should be EXCLUDED.
+- For "allowed for statistical purpose" or "set aside" grounds, relief_amount MUST be 0 (the addition stays pending further proceedings).
+- Parse Indian number format: 42,24,669 = 4224669
+- If the order mentions that a ground is "not pressed" or "withdrawn", treat status as "dismissed" with relief_amount 0.
+- addition_amount should be a plain number without commas
+
+PDF Text:
+"""
+
+
+def extract_cita_order(pdf_path: str, progress_cb=None) -> dict:
+    """Extract appeal grounds and decisions from CIT(A) order u/s 250."""
+    if progress_cb:
+        progress_cb("extracting", "Reading CIT(A) Order...", 0.55)
+
+    text = _extract_pdf_text(pdf_path)
+    logger.info(f"CIT(A) Order: extracted {len(text)} chars")
+
+    if progress_cb:
+        progress_cb("extracting", "Analyzing CIT(A) Order with AI...", 0.60)
+
+    data = _ask_gemini(CITA_PROMPT + text)
+    grounds = data.get("grounds", [])
+    logger.info(
+        f"CIT(A) Order parsed: {len(grounds)} grounds, "
+        f"total relief={data.get('total_relief', 0)}"
+    )
     return data

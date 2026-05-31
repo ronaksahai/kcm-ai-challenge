@@ -1,12 +1,13 @@
 """
 Order Scrutiny — Excel Generation
 Creates the standardized Order Scrutiny Excel workbook using openpyxl.
+Supports dynamic addition heads from Assessment Order and optional CIT(A) column.
 """
 
 import logging
 from datetime import datetime
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, Border, Side, numbers
+from openpyxl.styles import Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 logger = logging.getLogger(__name__)
@@ -23,11 +24,6 @@ THIN_BORDER = Border(
     top=Side(style="thin"),
     bottom=Side(style="thin"),
 )
-
-COL_WIDTHS = {
-    "A": 55.3, "B": 16.7, "C": 16.7, "D": 13.0,
-    "E": 17.1, "F": 55.0, "G": 15.0, "H": 12.3,
-}
 
 
 def _font(bold=False, size=FONT_SIZE):
@@ -87,17 +83,51 @@ def _gen_remark(roi_val, comp_val, head_name):
         return f"Reduction of Rs. {abs(int(diff)):,} by AO in {head_name}"
 
 
+def _match_ground_to_addition(grounds: list, addition: dict) -> dict | None:
+    """Find a CIT(A) ground that matches a given AO addition."""
+    add_desc = (addition.get("description") or "").lower()
+    add_section = (addition.get("section") or "").lower()
+    add_amount = addition.get("amount", 0)
+
+    for g in grounds:
+        g_desc = (g.get("addition_description") or g.get("description") or "").lower()
+        g_section = (g.get("section") or "").lower()
+        g_amount = g.get("addition_amount", 0)
+
+        # Match by section if both have one
+        if add_section and g_section and add_section == g_section:
+            return g
+        # Match by amount
+        if add_amount and g_amount and abs(add_amount - g_amount) < 2:
+            return g
+        # Match by keyword overlap in descriptions
+        add_words = set(add_desc.split())
+        g_words = set(g_desc.split())
+        overlap = add_words & g_words
+        # Need meaningful overlap (excluding common words)
+        common = {"of", "in", "the", "u/s", "us", "respect", "issue", "variation",
+                  "addition", "disallowance", "add", "on", "and", "for", "to", "a",
+                  "an", "as", "by", "at", "with", "from", "is", "was", "rs.", "rs",
+                  "amount", "total"}
+        meaningful = overlap - common
+        if len(meaningful) >= 2:
+            return g
+
+    return None
+
+
 # ── Main Excel Generator ────────────────────────────────────
 
 def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
                             ao_data: dict, output_path: str,
-                            progress_cb=None):
+                            cita_data: dict = None, progress_cb=None):
     """
     Generate the Order Scrutiny Excel workbook.
 
     comp_data  = Computation Sheet extracted data (143(3) column)
     intim_data = Intimation data with 'roi' and 'computed' sub-dicts
-    ao_data    = Assessment Order data (optional, may be empty dict)
+    ao_data    = Assessment Order data (required, has 'additions' list)
+    cita_data  = CIT(A) Order data (optional, has 'grounds' list)
     """
     if progress_cb:
         progress_cb("generating", "Creating Excel workbook...", 0.7)
@@ -106,13 +136,65 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     ws = wb.active
     ws.title = "Tax Payable"
 
-    # Column widths
-    for col_letter, width in COL_WIDTHS.items():
+    has_cita = bool(cita_data and cita_data.get("grounds"))
+
+    # ── Column layout ────────────────────────────────────────
+    # Columns follow the chronological timeline:
+    # A: Particulars
+    # B: As per ROI
+    # C: As per 143(1)
+    # D: As per 143(3)
+    # E: As per CIT(A) u/s 250 (only if CIT(A) data present)
+    # then: Corrected Computation, Remarks
+    is_itr = intim_data.get("is_itr", False)
+    has_143_1 = not is_itr
+
+    col_idx = 2
+    COL_ROI = col_idx; col_idx += 1
+    if has_143_1:
+        COL_C1 = col_idx; col_idx += 1
+    else:
+        COL_C1 = None
+    COL_C3 = col_idx; col_idx += 1
+    if has_cita:
+        COL_CITA = col_idx; col_idx += 1
+    else:
+        COL_CITA = None
+    COL_CORRECTED = col_idx; col_idx += 1
+    COL_REMARKS = col_idx
+
+    col_widths = {"A": 55.3}
+    letters = ["B", "C", "D", "E", "F", "G", "H", "I"]
+    curr = 0
+    col_widths[letters[curr]] = 16.7; curr += 1
+    if has_143_1:
+        col_widths[letters[curr]] = 16.7; curr += 1
+    col_widths[letters[curr]] = 16.7 if has_cita else 13.0; curr += 1
+    if has_cita:
+        col_widths[letters[curr]] = 20.0; curr += 1
+    col_widths[letters[curr]] = 17.1; curr += 1
+    col_widths[letters[curr]] = 55.0; curr += 1
+
+    for col_letter, width in col_widths.items():
         ws.column_dimensions[col_letter].width = width
 
-    roi = intim_data.get("roi", {})
-    c1 = intim_data.get("computed", {})
+    # Helper to get column letter
+    def cl(col_num):
+        return get_column_letter(col_num)
+
+    # base_col: used for income heads in 143(3) and CIT(A) — always ROI
+    base_col = cl(COL_ROI)
+    # c3_col: used for CIT(A) deductions/interest that inherit from AO
+    c3_col = cl(COL_C3)
+    base_data = intim_data.get("computed") if has_143_1 else intim_data.get("roi")
+    base_data = base_data or {}
+
+
+    roi = intim_data.get("roi") or {}
+    c1 = intim_data.get("computed") or {}
     c3 = comp_data
+    additions = ao_data.get("additions", []) if ao_data else []
+    grounds = cita_data.get("grounds", []) if cita_data else []
 
     entity = comp_data.get("entity_name") or intim_data.get("entity_name", "")
     ay = comp_data.get("assessment_year") or intim_data.get("assessment_year", "")
@@ -123,73 +205,101 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
 
     # ── Row 4: Demand ────────────────────────────────────────
     _cell(ws, 4, 1, "Demand as per order u/s 156", bold=True)
-    _cell(ws, 4, 2, _val(c3, "demand_amount") or _val(c3, "balance_payable_refundable"),
+    _cell(ws, 4, COL_ROI, _val(c3, "demand_amount") or _val(c3, "balance_payable_refundable"),
           bold=True, num_fmt=NUM_FMT)
 
     # ── Row 6-7: Section header ──────────────────────────────
     _cell(ws, 6, 1, "Working of Demand Payable or Refund", bold=True)
-    _cell(ws, 7, 4, "(Amount in Rs.)")
+    _cell(ws, 7, COL_C3, "(Amount in Rs.)")
 
     # ── Row 8: Column headers ────────────────────────────────
-    headers = ["Particulars", "As per ROI", "As per 143(1)",
-               "As per 143(3)", "Corrected Computation", "Remarks"]
+    headers = ["Particulars", "As per ROI"]
+    if has_143_1:
+        headers.append("As per 143(1)")
+    headers.append("As per 143(3)")
+    if has_cita:
+        headers.append("As per CIT(A)\nu/s 250")
+    headers.extend(["Corrected\nComputation", "Remarks"])
     for i, h in enumerate(headers, 1):
         _cell(ws, 8, i, h, bold=True)
 
     # ── Row 9-10: Dates ──────────────────────────────────────
     _cell(ws, 9, 1, "Filing Date")
-    _cell(ws, 9, 2, _parse_date(intim_data.get("filing_date")))
-    if isinstance(ws.cell(9, 2).value, datetime):
-        ws.cell(9, 2).number_format = "DD/MM/YYYY"
-    _cell(ws, 9, 3, "-")
-    _cell(ws, 9, 4, "-")
+    _cell(ws, 9, COL_ROI, _parse_date(intim_data.get("filing_date")))
+    if isinstance(ws.cell(9, COL_ROI).value, datetime):
+        ws.cell(9, COL_ROI).number_format = "DD/MM/YYYY"
+    if has_143_1:
+        _cell(ws, 9, COL_C1, "-")
+    _cell(ws, 9, COL_C3, "-")
+    if has_cita:
+        _cell(ws, 9, COL_CITA, "-")
 
     _cell(ws, 10, 1, "Order Date")
-    _cell(ws, 10, 2, "-")
-    _cell(ws, 10, 3, _parse_date(intim_data.get("intimation_date")))
-    if isinstance(ws.cell(10, 3).value, datetime):
-        ws.cell(10, 3).number_format = "DD/MM/YYYY"
-    _cell(ws, 10, 4, _parse_date(c3.get("order_date")))
-    if isinstance(ws.cell(10, 4).value, datetime):
-        ws.cell(10, 4).number_format = "DD/MM/YYYY"
+    _cell(ws, 10, COL_ROI, "-")
+    if has_143_1:
+        _cell(ws, 10, COL_C1, _parse_date(intim_data.get("intimation_date")))
+        if isinstance(ws.cell(10, COL_C1).value, datetime):
+            ws.cell(10, COL_C1).number_format = "DD/MM/YYYY"
+    _cell(ws, 10, COL_C3, _parse_date(c3.get("order_date")))
+    if isinstance(ws.cell(10, COL_C3).value, datetime):
+        ws.cell(10, COL_C3).number_format = "DD/MM/YYYY"
+    if has_cita:
+        _cell(ws, 10, COL_CITA, _parse_date(cita_data.get("order_date")))
+        if isinstance(ws.cell(10, COL_CITA).value, datetime):
+            ws.cell(10, COL_CITA).number_format = "DD/MM/YYYY"
 
     # ── Row 12: Section title (merged) ───────────────────────
-    ws.merge_cells("A12:F12")
+    last_col_letter = cl(len(headers))
+    ws.merge_cells(f"A12:{last_col_letter}12")
     _cell(ws, 12, 1, "Computation of Income Tax Payable/(Refundable)", bold=True)
 
     # ── Row 14: Heads of Income ──────────────────────────────
     _cell(ws, 14, 1, "Heads of Income ", bold=True)
 
-    # Helper to fill a data row (A=label, B=ROI, C=143(1), D=143(3), F=remark)
-    def data_row(row, label, roi_key, c1_key=None, c3_key=None,
+    # ── Helper: data_row ─────────────────────────────────────
+    def data_row(row, label, roi_key=None, c1_key=None, c3_key=None,
                  bold=False, roi_val=None, c1_val=None, c3_val=None,
+                 cita_val=None,
                  formula_b=None, formula_c=None, formula_d=None,
-                 formula_e=None, auto_remark=False, remark=""):
+                 formula_e=None, formula_corr=None,
+                 auto_remark=False, remark=""):
         _cell(ws, row, 1, label, bold=bold)
 
+        # Column B: ROI
         if formula_b:
-            _cell(ws, row, 2, formula_b, bold=bold, num_fmt=NUM_FMT)
+            _cell(ws, row, COL_ROI, formula_b, bold=bold, num_fmt=NUM_FMT)
         elif roi_val is not None:
-            _cell(ws, row, 2, roi_val, bold=bold, num_fmt=NUM_FMT)
+            _cell(ws, row, COL_ROI, roi_val, bold=bold, num_fmt=NUM_FMT)
         elif roi_key:
-            _cell(ws, row, 2, _val(roi, roi_key), bold=bold, num_fmt=NUM_FMT)
+            _cell(ws, row, COL_ROI, _val(roi, roi_key), bold=bold, num_fmt=NUM_FMT)
 
-        if formula_c:
-            _cell(ws, row, 3, formula_c, bold=bold, num_fmt=NUM_FMT)
-        elif c1_val is not None:
-            _cell(ws, row, 3, c1_val, bold=bold, num_fmt=NUM_FMT)
-        elif c1_key:
-            _cell(ws, row, 3, _val(c1, c1_key), bold=bold, num_fmt=NUM_FMT)
+        # Column C: 143(1)
+        if has_143_1:
+            if formula_c:
+                _cell(ws, row, COL_C1, formula_c, bold=bold, num_fmt=NUM_FMT)
+            elif c1_val is not None:
+                _cell(ws, row, COL_C1, c1_val, bold=bold, num_fmt=NUM_FMT)
+            elif c1_key:
+                _cell(ws, row, COL_C1, _val(c1, c1_key), bold=bold, num_fmt=NUM_FMT)
 
+        # Column D: 143(3)
         if formula_d:
-            _cell(ws, row, 4, formula_d, bold=bold, num_fmt=NUM_FMT)
+            _cell(ws, row, COL_C3, formula_d, bold=bold, num_fmt=NUM_FMT)
         elif c3_val is not None:
-            _cell(ws, row, 4, c3_val, bold=bold, num_fmt=NUM_FMT)
+            _cell(ws, row, COL_C3, c3_val, bold=bold, num_fmt=NUM_FMT)
         elif c3_key:
-            _cell(ws, row, 4, _val(c3, c3_key), bold=bold, num_fmt=NUM_FMT)
+            _cell(ws, row, COL_C3, _val(c3, c3_key), bold=bold, num_fmt=NUM_FMT)
 
-        if formula_e:
-            _cell(ws, row, 5, formula_e, bold=bold, num_fmt=NUM_FMT)
+        # Column E: CIT(A) (only if present)
+        if has_cita:
+            if formula_e:
+                _cell(ws, row, COL_CITA, formula_e, bold=bold, num_fmt=NUM_FMT)
+            elif cita_val is not None:
+                _cell(ws, row, COL_CITA, cita_val, bold=bold, num_fmt=NUM_FMT)
+
+        # Corrected Computation
+        if formula_corr:
+            _cell(ws, row, COL_CORRECTED, formula_corr, bold=bold, num_fmt=NUM_FMT)
 
         # Auto-generate remark if difference exists
         if auto_remark and not remark:
@@ -198,215 +308,720 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
             remark = _gen_remark(rv, cv, label.strip())
 
         if remark:
-            _cell(ws, row, 6, remark)
+            _cell(ws, row, COL_REMARKS, remark)
 
-    # ── Rows 15-23: Income heads ─────────────────────────────
-    data_row(15, "Income from House Property",
-             "income_house_property", "income_house_property", "income_house_property",
-             auto_remark=True, c1_val=_val(c1, "income_house_property"))
-    # Make C15 and D15 bold like sample
-    ws.cell(15, 3).font = _font(bold=True)
-    ws.cell(15, 4).font = _font(bold=True)
+    # ── Rows 15+: Income heads with dynamic additions ────────
 
-    data_row(16, "Profits and Gains from Business or Profession",
-             "income_business_profession", "income_business_profession",
-             "income_business_profession", auto_remark=True)
+    # Group additions by head_of_income
+    additions_by_head = {}
+    for a in additions:
+        head = (a.get("head_of_income")
+                or "Business or Profession").strip()
+        # Normalize head names
+        head_lower = head.lower()
+        if "house" in head_lower:
+            head = "House Property"
+        elif ("business" in head_lower
+              or "profession" in head_lower):
+            head = "Business or Profession"
+        elif "capital" in head_lower:
+            head = "Capital Gains"
+        elif "other" in head_lower:
+            head = "Other Sources"
+        additions_by_head.setdefault(head, []).append(a)
 
-    # Addition rows (from AO) - populate from assessment order if available
-    additions = ao_data.get("additions", []) if ao_data else []
-    add_labels = [
-        ("Add: Adjustment by TPO", 17),
-        ("Add: Disallowance of CSR expense", 18),
-        ("Add: Disallowance us 40(a)(ia) rws 194C", 19),
-        ("Add: Disallowance us 40(a)(ia) rws 194R", 20),
-    ]
-    for label, row in add_labels:
-        amt = 0
-        remark = ""
-        for a in additions:
-            desc = (a.get("description") or "").lower()
-            if any(kw in desc for kw in label.lower().split(":")[1].strip().split()):
-                amt = a.get("amount", 0)
-                remark = a.get("description", "")
-                break
-        _cell(ws, row, 1, label)
-        _cell(ws, row, 4, amt, num_fmt=NUM_FMT)
-        if remark:
-            _cell(ws, row, 6, remark)
+    # ── Helper: write addition sub-rows ────────────────────────
+    def _write_addition_rows(start_row, head_additions, grounds_list, head_key):
+        """Write addition sub-rows under a major head. Returns next row."""
+        row = start_row
+        sum_adds = 0
+        for a in head_additions:
+            desc = a.get("description", "Addition")
+            amt = a.get("amount", 0)
+            sum_adds += amt
+            matched = (_match_ground_to_addition(grounds_list, a)
+                       if grounds_list else None)
+            remark = desc
+            cita_cell_val = None
 
-    data_row(21, "Income from Capital Gains",
-             "income_capital_gains", "income_capital_gains",
-             "income_capital_gains", auto_remark=True)
+            if matched:
+                status = matched.get("status", "")
+                relief = matched.get("relief_amount", 0)
+                cita_remark = ""
+                if status == "allowed":
+                    cita_cell_val = 0
+                    cita_remark = (
+                        "Allowed by CIT(A) — addition deleted")
+                elif status == "dismissed":
+                    cita_cell_val = amt
+                    cita_remark = (
+                        "Dismissed by CIT(A) — addition upheld")
+                elif status == "partly_allowed":
+                    cita_cell_val = amt - relief
+                    cita_remark = (
+                        "Partly allowed by CIT(A) — "
+                        f"relief of Rs. {int(relief):,}")
+                elif status == "allowed_for_statistical_purpose":
+                    cita_cell_val = amt
+                    cita_remark = (
+                        "Allowed for statistical purpose "
+                        "— set aside to AO")
+                if cita_remark:
+                    remark = f"{desc}. {cita_remark}"
+                if matched.get("remarks"):
+                    remark += f". {matched['remarks']}"
 
-    data_row(22, "Income from Other Sources",
+            _cell(ws, row, 1, f"Add: {desc}")
+            _cell(ws, row, COL_C3, amt, num_fmt=NUM_FMT)
+            if has_cita and cita_cell_val is not None:
+                _cell(ws, row, COL_CITA, cita_cell_val,
+                      num_fmt=NUM_FMT)
+            if remark:
+                _cell(ws, row, COL_REMARKS, remark)
+            row += 1
+
+        # Calculate unaccounted difference to match computation sheet
+        c3_total = _val(c3, head_key)
+        base_total = _val(base_data, head_key)
+        if c3_total is not None and base_total is not None:
+            diff = c3_total - (base_total + sum_adds)
+            if diff != 0:
+                label = "Add: Other unaccounted adjustments as per computation sheet" if diff > 0 else "Less: Other unaccounted reductions as per computation sheet"
+                _cell(ws, row, 1, label)
+                _cell(ws, row, COL_C3, diff, num_fmt=NUM_FMT)
+                _cell(ws, row, COL_REMARKS, "Balancing figure to match computation sheet total")
+                row += 1
+
+        return row
+
+    cur_row = 15
+    hp_row = cur_row  # remember first income row for GTI SUM
+
+    # --- House Property ---
+    data_row(cur_row, "Income from House Property",
+             "income_house_property", "income_house_property", None,
+             formula_d=f"={base_col}{cur_row}",
+             formula_e=f"={base_col}{cur_row}" if has_cita else None)
+    cur_row += 1
+    # Addition sub-rows for House Property
+    hp_adds = additions_by_head.get("House Property", [])
+    if hp_adds or _val(c3, "income_house_property") != _val(base_data, "income_house_property"):
+        cur_row = _write_addition_rows(cur_row, hp_adds, grounds, "income_house_property")
+
+    # --- Business or Profession ---
+    data_row(cur_row, "Profits and Gains from Business or Profession",
+             "income_business_profession",
+             "income_business_profession", None,
+             formula_d=f"={base_col}{cur_row}",
+             formula_e=f"={base_col}{cur_row}" if has_cita else None)
+    cur_row += 1
+    # Addition sub-rows for PGBP
+    bp_adds = additions_by_head.get("Business or Profession", [])
+    if bp_adds or _val(c3, "income_business_profession") != _val(base_data, "income_business_profession"):
+        cur_row = _write_addition_rows(cur_row, bp_adds, grounds, "income_business_profession")
+
+    # --- Capital Gains ---
+    data_row(cur_row, "Income from Capital Gains",
+             "income_capital_gains", "income_capital_gains", None,
+             formula_d=f"={base_col}{cur_row}",
+             formula_e=f"={base_col}{cur_row}" if has_cita else None)
+    cur_row += 1
+    # Addition sub-rows for Capital Gains
+    cg_adds = additions_by_head.get("Capital Gains", [])
+    if cg_adds or _val(c3, "income_capital_gains") != _val(base_data, "income_capital_gains"):
+        cur_row = _write_addition_rows(cur_row, cg_adds, grounds, "income_capital_gains")
+
+    # --- Other Sources ---
+    data_row(cur_row, "Income from Other Sources",
              "income_other_sources", None, None,
-             formula_c="=B22", formula_d="=C22")
+             formula_c=f"={cl(COL_ROI)}{cur_row}",
+             formula_d=f"={base_col}{cur_row}",
+             formula_e=f"={base_col}{cur_row}" if has_cita else None)
+    cur_row += 1
+    # Addition sub-rows for Other Sources
+    os_adds = additions_by_head.get("Other Sources", [])
+    if os_adds or _val(c3, "income_other_sources") != _val(base_data, "income_other_sources"):
+        cur_row = _write_addition_rows(cur_row, os_adds, grounds, "income_other_sources")
 
-    _cell(ws, 23, 1, "Add: Forex Gain on dividend from foreign subsidiary")
-    _cell(ws, 23, 4, 0, num_fmt=NUM_FMT)
+    # ── Loss Setoffs ─────────────────────────────────────────
+    cy_row = cur_row
+    data_row(cy_row, "Less: Losses of current year set off",
+             "current_year_loss_setoff", "current_year_loss_setoff", "current_year_loss_setoff",
+             formula_e=f"={cl(COL_ROI)}{cur_row}" if has_cita else None)
+    cur_row += 1
 
-    # ── Row 24: Gross Total Income ───────────────────────────
-    data_row(24, "Gross Total Income as per Return of Income", None, None, None,
-             bold=True, formula_b="=SUM(B15:B23)", formula_c="=SUM(C15:C23)",
-             formula_d="=SUM(D15:D23)")
+    bf_row = cur_row
+    data_row(bf_row, "Less: Brought forward losses set off",
+             "brought_forward_loss_setoff", "brought_forward_loss_setoff", "brought_forward_loss_setoff",
+             formula_e=f"={c3_col}{cur_row}" if has_cita else None)
+    cur_row += 1
 
-    # ── Row 26: Assessed GTI ─────────────────────────────────
-    data_row(26, "Assessed Gross Total Income", None, None, None,
-             bold=True, formula_b="=SUM(B24:B24)", formula_c="=SUM(C24:C24)",
-             formula_d="=SUM(D24:D24)")
-
-    # ── Row 28-30: Deductions ────────────────────────────────
-    data_row(28, "Less: Deduction under Chapter VI-A", None, None, None,
-             bold=True, formula_b="=SUM(B29:B30)", formula_c="=SUM(C29:C30)",
-             formula_d="=SUM(D29:D30)")
-    data_row(29, "Part-B of Chapter VI-A",
-             "deduction_part_b", "deduction_part_b", "deduction_part_b")
-    data_row(30, "Part-C of Chapter VI-A",
-             "deduction_part_c", None, None,
-             formula_c="=B30", formula_d="=C30")
-
-    # ── Row 32: 10AA ─────────────────────────────────────────
-    data_row(32, "Deduction u/s 10AA",
-             "deduction_10aa", "deduction_10aa", "deduction_10aa")
-
-    # ── Row 34: Total Income ─────────────────────────────────
-    data_row(34, "Total Income as per Normal provisions", None, None, None,
-             bold=True, formula_b="=ROUND(B26-B28,-1)",
-             formula_c="=ROUND(C26-C28,-1)", formula_d="=ROUND(D26-D28,-1)")
-
-    # ── Row 36: Tax ref Note-1 ───────────────────────────────
-    data_row(36, "Tax as per Normal provision (Refer Note 1 below)",
+    # ── Gross Total Income ───────────────────────────────────
+    # Sum from the first income head row to the row before loss setoffs, minus setoffs
+    gti_row = cur_row
+    b, c, d = cl(COL_ROI), cl(COL_C1) if has_143_1 else "", cl(COL_C3)
+    
+    fc = f"=SUM({c}{hp_row}:{c}{cy_row - 1})-{c}{cy_row}-{c}{bf_row}" if has_143_1 else None
+    data_row(gti_row,
+             "Gross Total Income as per Return of Income",
              None, None, None, bold=True,
-             formula_b="=B72", formula_c="=C72", formula_d="=D72")
+             formula_b=f"=SUM({b}{hp_row}:{b}{cy_row - 1})-{b}{cy_row}-{b}{bf_row}",
+             formula_c=fc,
+             formula_d=f"=SUM({d}{hp_row}:{d}{cy_row - 1})-{d}{cy_row}-{d}{bf_row}")
+    if has_cita:
+        e = cl(COL_CITA)
+        _cell(ws, gti_row, COL_CITA,
+              f"=SUM({e}{hp_row}:{e}{cy_row - 1})-{e}{cy_row}-{e}{bf_row}",
+              bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
 
-    # ── Rows 38-44: Interest ─────────────────────────────────
-    _cell(ws, 38, 1, "Add:")
-    data_row(39, "       Interest U/s 234A",
+    # Skip a row
+    cur_row += 1
+
+    # ── Assessed Gross Total Income ──────────────────────────
+    agti_row = cur_row
+    data_row(agti_row, "Assessed Gross Total Income", None, None, None,
+             bold=True,
+             formula_b=f"={b}{gti_row}",
+             formula_c=f"={c}{gti_row}",
+             formula_d=f"={d}{gti_row}")
+    if has_cita:
+        _cell(ws, agti_row, COL_CITA,
+              f"={cl(COL_CITA)}{gti_row}", bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
+
+    # Skip a row
+    cur_row += 1
+
+    # ── Deductions ───────────────────────────────────────────
+    ded_header_row = cur_row
+    ded_b_row = cur_row + 1
+    ded_c_row = cur_row + 2
+
+    data_row(ded_header_row, "Less: Deduction under Chapter VI-A", None, None, None,
+             bold=True,
+             formula_b=f"=SUM({b}{ded_b_row}:{b}{ded_c_row})",
+             formula_c=f"=SUM({c}{ded_b_row}:{c}{ded_c_row})",
+             formula_d=f"=SUM({d}{ded_b_row}:{d}{ded_c_row})")
+    if has_cita:
+        _cell(ws, ded_header_row, COL_CITA,
+              f"=SUM({cl(COL_CITA)}{ded_b_row}:{cl(COL_CITA)}{ded_c_row})",
+              bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
+
+    data_row(cur_row, "Part-B of Chapter VI-A",
+             "deduction_part_b", "deduction_part_b", "deduction_part_b")
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    cur_row += 1
+
+    data_row(cur_row, "Part-C of Chapter VI-A",
+             "deduction_part_c", "deduction_part_c", "deduction_part_c")
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    cur_row += 1
+
+    # Skip a row
+    cur_row += 1
+
+    # ── Deduction u/s 10AA ───────────────────────────────────
+    ded10aa_row = cur_row
+    data_row(cur_row, "Deduction u/s 10AA",
+             "deduction_10aa", "deduction_10aa", "deduction_10aa")
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    cur_row += 1
+
+    # Skip a row
+    cur_row += 1
+
+    # ── Total Income ─────────────────────────────────────────
+    ti_row = cur_row
+    data_row(ti_row, "Total Income as per Normal provisions", None, None, None,
+             bold=True,
+             formula_b=f"=ROUND({b}{agti_row}-{b}{ded_header_row},-1)",
+             formula_c=f"=ROUND({c}{agti_row}-{c}{ded_header_row},-1)" if has_143_1 else None,
+             formula_d=f"=ROUND({d}{agti_row}-{d}{ded_header_row},-1)")
+    if has_cita:
+        e = cl(COL_CITA)
+        _cell(ws, ti_row, COL_CITA,
+              f"=ROUND({e}{agti_row}-{e}{ded_header_row},-1)",
+              bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
+
+    # ── Deemed Total Income u/s 115JB ────────────────────────
+    mat_inc_row = cur_row
+    data_row(cur_row, "Deemed Total Income u/s 115JB",
+             "income_115jb", "income_115jb", "income_115jb",
+             formula_e=f"={cl(COL_ROI)}{cur_row}" if has_cita else None)
+    cur_row += 1
+
+    # ── Losses carried forward ───────────────────────────────
+    cf_row = cur_row
+    data_row(cur_row, "Losses in current year to be carried forward",
+             "loss_carried_forward", "loss_carried_forward", "loss_carried_forward",
+             formula_e=f"={cl(COL_ROI)}{cur_row}" if has_cita else None)
+    cur_row += 1
+
+    # Skip a row
+    cur_row += 1
+
+    # ── Tax (Refer Note-1) ───────────────────────────────────
+    # We'll set the note row reference later
+    tax_ref_row = cur_row
+    # Placeholder — will be filled with formula referencing note total
+    _cell(ws, tax_ref_row, 1, "Tax as per Normal provision (Refer Note 1 below)", bold=True)
+    cur_row += 1
+
+    # Skip a row
+    cur_row += 1
+
+    # ── Interest Section ─────────────────────────────────────
+    _cell(ws, cur_row, 1, "Add:")
+    cur_row += 1
+
+    int_start = cur_row
+    data_row(cur_row, "       Interest U/s 234A",
              "interest_234a", "interest_234a", "interest_234a")
-    data_row(40, "       Interest U/s 234B",
-             "interest_234b", "interest_234b", "interest_234b",
-             formula_d="=B40")
-    data_row(41, "       Interest U/s 234C",
-             "interest_234c", "interest_234c", None,
-             formula_c="=B41", formula_d="=C41")
-    data_row(42, "       Interest U/s 234D",
-             None, None, None, roi_val=0, formula_c="=B42", formula_d="=C42")
-    data_row(43, "       FEE FOR DEFAULT IN FURNISHING \nRETURN OF INCOME (SECTION 234F)",
-             "fee_234f", "fee_234f", "fee_234f")
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    cur_row += 1
 
-    # Total interest - use direct value for 143(3) if AO gave lump sum
-    _cell(ws, 44, 1, "TOTAL INTEREST AND FEE PAYABLE", bold=True)
-    _cell(ws, 44, 2, "=SUM(B39:B43)", num_fmt=NUM_FMT)
-    _cell(ws, 44, 3, "=SUM(C39:C43)", num_fmt=NUM_FMT)
+    data_row(cur_row, "       Interest U/s 234B",
+             "interest_234b", "interest_234b", "interest_234b")
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    cur_row += 1
+
+    data_row(cur_row, "       Interest U/s 234C",
+             "interest_234c", "interest_234c", "interest_234c")
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    cur_row += 1
+
+    data_row(cur_row, "       Interest U/s 234D",
+             "interest_234d", "interest_234d", "interest_234d")
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    cur_row += 1
+
+    data_row(cur_row, "       FEE FOR DEFAULT IN FURNISHING \nRETURN OF INCOME (SECTION 234F)",
+             "fee_234f", "fee_234f", "fee_234f")
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    int_end = cur_row
+    cur_row += 1
+
+    # Total interest
+    total_int_row = cur_row
+    _cell(ws, total_int_row, 1, "TOTAL INTEREST AND FEE PAYABLE", bold=True)
+    _cell(ws, total_int_row, COL_ROI,
+          f"=SUM({b}{int_start}:{b}{int_end})", num_fmt=NUM_FMT)
+    if has_143_1:
+        _cell(ws, total_int_row, COL_C1,
+              f"=SUM({c}{int_start}:{c}{int_end})", num_fmt=NUM_FMT)
+
     total_int = _val(c3, "total_interest_fee")
     if total_int > 0:
-        _cell(ws, 44, 4, total_int, bold=True, num_fmt=NUM_FMT)
-        _cell(ws, 44, 6, f"Interest of Rs. {int(total_int):,} levied by AO")
+        _cell(ws, total_int_row, COL_C3, total_int, bold=True, num_fmt=NUM_FMT)
+        _cell(ws, total_int_row, COL_REMARKS,
+              f"Interest of Rs. {int(total_int):,} levied by AO")
     else:
-        _cell(ws, 44, 4, "=SUM(D39:D43)", bold=True, num_fmt=NUM_FMT)
+        _cell(ws, total_int_row, COL_C3,
+              f"=SUM({d}{int_start}:{d}{int_end})", bold=True, num_fmt=NUM_FMT)
 
-    # ── Row 46: Total Tax Payable ────────────────────────────
-    data_row(46, "Total Tax Payable ", None, None, None,
-             bold=True, formula_b="=B36+B44", formula_c="=C36+C44",
-             formula_d="=D36+D44")
+    if has_cita:
+        e = cl(COL_CITA)
+        _cell(ws, total_int_row, COL_CITA,
+              f"=SUM({e}{int_start}:{e}{int_end})", bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
 
-    # ── Rows 48-54: Taxes Paid ───────────────────────────────
-    _cell(ws, 48, 1, "Less:", bold=True)
-    data_row(49, "         Tax Deducted at Source",
+    # Skip a row
+    cur_row += 1
+
+    # ── Total Tax Payable ────────────────────────────────────
+    ttp_row = cur_row
+    data_row(ttp_row, "Total Tax Payable ", None, None, None,
+             bold=True,
+             formula_b=f"={b}{tax_ref_row}+{b}{total_int_row}",
+             formula_c=f"={c}{tax_ref_row}+{c}{total_int_row}",
+             formula_d=f"={d}{tax_ref_row}+{d}{total_int_row}")
+    if has_cita:
+        e = cl(COL_CITA)
+        _cell(ws, ttp_row, COL_CITA,
+              f"={e}{tax_ref_row}+{e}{total_int_row}", bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
+
+    # Skip a row
+    cur_row += 1
+
+    # ── Taxes Paid ───────────────────────────────────────────
+    _cell(ws, cur_row, 1, "Less:", bold=True)
+    cur_row += 1
+
+    tax_paid_start = cur_row
+    data_row(cur_row, "         Tax Deducted at Source",
              "tds", "tds", "tds", auto_remark=True)
-    data_row(50, "         Tax Collected at Source",
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    cur_row += 1
+
+    data_row(cur_row, "         Tax Collected at Source",
              "tcs", "tcs", "tcs", auto_remark=True)
-    data_row(51, "         Advance Tax",
-             "advance_tax", None, "advance_tax",
-             formula_c="=B51")
-    data_row(52, "         Self Assessment Tax",
-             "self_assessment_tax", None, None,
-             formula_c="=B52", formula_d="=C52")
-    data_row(53, "         Regular Assessment Tax",
-             "regular_tax", "regular_tax", None, roi_val=0)
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    cur_row += 1
 
-    data_row(54, "Total Taxes Paid", None, None, None,
-             bold=True, formula_b="=SUM(B49:B53)",
-             formula_c="=SUM(C49:C53)", formula_d="=SUM(D49:D53)")
+    data_row(cur_row, "         Advance Tax",
+             "advance_tax", "advance_tax", "advance_tax")
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    cur_row += 1
 
-    # ── Row 56-61: Net Tax / Refund ──────────────────────────
-    data_row(56, "Net Tax Payable/Refundable", None, None, None,
-             bold=True, formula_b="=ROUND(B46-SUM(B49:B53),-1)",
-             formula_c="=ROUND(C46-SUM(C49:C53),-1)",
-             formula_d="=ROUND(D46-SUM(D49:D53),-1)")
+    data_row(cur_row, "         Self Assessment Tax",
+             "self_assessment_tax", "self_assessment_tax", "self_assessment_tax")
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              _val(roi, "self_assessment_tax"), num_fmt=NUM_FMT)
+    cur_row += 1
 
-    _cell(ws, 57, 1, "Add: Interest u/s 244A (As per separate sheet attached)")
-    for col in (2, 3, 4):
-        _cell(ws, 57, col, 0, bold=True, num_fmt=NUM_FMT)
+    data_row(cur_row, "         Regular Assessment Tax",
+             "regular_tax", "regular_tax", "regular_tax")
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    tax_paid_end = cur_row
+    cur_row += 1
 
-    _cell(ws, 58, 1, "Less: Refund Already Issued")
-    _cell(ws, 58, 2, 0, num_fmt=NUM_FMT)
-    _cell(ws, 58, 3, 0, num_fmt=NUM_FMT)
+    # Total Taxes Paid
+    ttp2_row = cur_row
+    data_row(ttp2_row, "Total Taxes Paid", None, None, None,
+             bold=True,
+             formula_b=f"=SUM({b}{tax_paid_start}:{b}{tax_paid_end})",
+             formula_c=f"=SUM({c}{tax_paid_start}:{c}{tax_paid_end})" if has_143_1 else None,
+             formula_d=f"=SUM({d}{tax_paid_start}:{d}{tax_paid_end})")
+    if has_cita:
+        e = cl(COL_CITA)
+        _cell(ws, ttp2_row, COL_CITA,
+              f"=SUM({e}{tax_paid_start}:{e}{tax_paid_end})",
+              bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
+
+    # Skip a row
+    cur_row += 1
+
+    # ── Net Tax Payable/Refundable ───────────────────────────
+    net_row = cur_row
+    data_row(net_row, "Net Tax Payable/Refundable", None, None, None,
+             bold=True,
+             formula_b=f"=ROUND({b}{ttp_row}-SUM({b}{tax_paid_start}:{b}{tax_paid_end}),-1)",
+             formula_c=f"=ROUND({c}{ttp_row}-SUM({c}{tax_paid_start}:{c}{tax_paid_end}),-1)" if has_143_1 else None,
+             formula_d=f"=ROUND({d}{ttp_row}-SUM({d}{tax_paid_start}:{d}{tax_paid_end}),-1)")
+    if has_cita:
+        e = cl(COL_CITA)
+        _cell(ws, net_row, COL_CITA,
+              f"=ROUND({e}{ttp_row}-SUM({e}{tax_paid_start}:{e}{tax_paid_end}),-1)",
+              bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
+
+    # Interest 244A
+    int244a_row = cur_row
+    _cell(ws, cur_row, 1, "Add: Interest u/s 244A (As per separate sheet attached)")
+    cols_to_fill = [COL_ROI, COL_C3]
+    if has_143_1:
+        cols_to_fill.insert(1, COL_C1)
+    for col in cols_to_fill:
+        _cell(ws, cur_row, col, 0, bold=True, num_fmt=NUM_FMT)
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA, 0, bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
+
+    # Refund Already Issued
+    ref_row = cur_row
+    _cell(ws, cur_row, 1, "Less: Refund Already Issued")
+    _cell(ws, cur_row, COL_ROI, 0, num_fmt=NUM_FMT)
+    if has_143_1:
+        _cell(ws, cur_row, COL_C1, 0, num_fmt=NUM_FMT)
     ref_issued = _val(c3, "refund_already_issued")
-    _cell(ws, 58, 4, ref_issued, num_fmt=NUM_FMT)
+    _cell(ws, cur_row, COL_C3, ref_issued, num_fmt=NUM_FMT)
     if ref_issued > 0:
-        _cell(ws, 58, 6, f"Refund of Rs. {int(ref_issued):,} already issued and adjusted")
+        _cell(ws, cur_row, COL_REMARKS,
+              f"Refund of Rs. {int(ref_issued):,} already issued and adjusted")
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA, ref_issued, num_fmt=NUM_FMT)
+    cur_row += 1
 
-    data_row(59, "Payable /(Refund)", None, None, None,
-             bold=True, formula_b="=B56-B57+B58",
-             formula_c="=C56-C57+C58", formula_d="=D56-D57+D58")
+    # Payable/(Refund)
+    pay_row = cur_row
+    data_row(pay_row, "Payable /(Refund)", None, None, None,
+             bold=True,
+             formula_b=f"={b}{net_row}-{b}{int244a_row}+{b}{ref_row}",
+             formula_c=f"={c}{net_row}-{c}{int244a_row}+{c}{ref_row}",
+             formula_d=f"={d}{net_row}-{d}{int244a_row}+{d}{ref_row}")
+    if has_cita:
+        e = cl(COL_CITA)
+        _cell(ws, pay_row, COL_CITA,
+              f"={e}{net_row}-{e}{int244a_row}+{e}{ref_row}",
+              bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
 
-    _cell(ws, 60, 1, "Refund Adjusted")
-    _cell(ws, 60, 2, 0, bold=True, num_fmt=NUM_FMT)
+    # Refund Adjusted
+    refadj_row = cur_row
+    _cell(ws, cur_row, 1, "Refund Adjusted")
+    _cell(ws, cur_row, COL_ROI, 0, bold=True, num_fmt=NUM_FMT)
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA, 0, bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
 
-    data_row(61, "Payable /(Refund) - Round off  (A)", None, None, None,
-             bold=True, formula_b="=ROUND(B59+B60,-1)",
-             formula_c="=ROUND(C59+C60,-1)", formula_d="=ROUND(D59+D60,-1)")
+    # Payable/(Refund) - Round off (A)
+    final_row = cur_row
+    data_row(final_row, "Payable /(Refund) - Round off  (A)", None, None, None,
+             bold=True,
+             formula_b=f"=ROUND({b}{pay_row}+{b}{refadj_row},-1)",
+             formula_c=f"=ROUND({c}{pay_row}+{c}{refadj_row},-1)",
+             formula_d=f"=ROUND({d}{pay_row}+{d}{refadj_row},-1)")
+    if has_cita:
+        e = cl(COL_CITA)
+        _cell(ws, final_row, COL_CITA,
+              f"=ROUND({e}{pay_row}+{e}{refadj_row},-1)",
+              bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
 
-    # ── Rows 64-72: Note-1 Tax Calculation ───────────────────
+    # ── Calculate Dynamic Rates ───────────────────────────────
+    def _calculate_rates(sources):
+        """Deduce tax/surcharge/cess rates from extracted data.
+        Returns (n_rate, n_roi_rate, m_rate, s_rate, c_rate) as clean floats
+        plus formatted percentage strings for Excel formulas.
+        """
+        n_rate = n_roi_rate = m_rate = s_rate = c_rate = 0.0
+
+        for data in sources:
+            if not data:
+                continue
+
+            # MAT Rate (most reliable — income_115jb is always present)
+            if m_rate == 0:
+                inc_mat = _val(data, "income_115jb")
+                tax_mat = _val(data, "tax_115jb")
+                if inc_mat and tax_mat:
+                    m_rate = tax_mat / inc_mat
+
+            # Surcharge Rate
+            if s_rate == 0:
+                surcharge = _val(data, "surcharge_total")
+                tax_base = max(
+                    _val(data, "tax_normal_rates") or _val(data, "tax_on_total_income") or 0,
+                    _val(data, "tax_115jb") or 0,
+                )
+                if tax_base and surcharge:
+                    s_rate = surcharge / tax_base
+
+            # Cess Rate
+            if c_rate == 0:
+                cess = _val(data, "cess")
+                surcharge_v = _val(data, "surcharge_total") or 0
+                tax_base = max(
+                    _val(data, "tax_normal_rates") or _val(data, "tax_on_total_income") or 0,
+                    _val(data, "tax_115jb") or 0,
+                )
+                if cess and (tax_base + surcharge_v):
+                    c_rate = cess / (tax_base + surcharge_v)
+
+            # Normal Rate — compute from every source so we can
+            # detect the ROI rate vs the 143(3) rate
+            inc_normal = _val(data, "income_normal_rates") or _val(data, "total_income")
+            tax_normal = _val(data, "tax_normal_rates") or _val(data, "tax_on_total_income")
+            if inc_normal and tax_normal:
+                computed_rate = tax_normal / inc_normal
+                if data is roi:
+                    n_roi_rate = computed_rate
+                elif n_rate == 0:
+                    n_rate = computed_rate
+
+        # Fallbacks
+        m_rate = m_rate if m_rate else 0.185
+        s_rate = s_rate if s_rate else 0.0
+        c_rate = c_rate if c_rate else 0.04
+        n_rate = n_rate if n_rate else 0.30
+        n_roi_rate = n_roi_rate if n_roi_rate else n_rate
+
+        # Round to clean percentages for Excel formula strings
+        def _snap(r):
+            """Snap floating point to nearest 0.5% increment."""
+            pct = r * 100
+            snapped = round(pct * 2) / 2  # nearest 0.5
+            return snapped / 100
+
+        m_rate = _snap(m_rate)
+        s_rate = _snap(s_rate)
+        c_rate = _snap(c_rate)
+        n_rate = _snap(n_rate)
+        n_roi_rate = _snap(n_roi_rate)
+
+        def fmt(r):
+            v = r * 100
+            return f"{v:g}%"
+
+        return (n_rate, n_roi_rate, m_rate, s_rate, c_rate,
+                fmt(n_rate), fmt(n_roi_rate), fmt(m_rate), fmt(s_rate), fmt(c_rate))
+
+    (n_val, n_roi_val, m_val, s_val, c_val,
+     n_str, n_roi_str, m_str, s_str, c_str) = _calculate_rates([roi, c1, c3])
+
+    # ── Note-1: Calculation of Tax ───────────────────────────
     if progress_cb:
         progress_cb("generating", "Building tax calculation note...", 0.85)
 
-    _cell(ws, 64, 1, "Note-1 : Calculation of tax liability as per Normal provisions",
-          bold=True)
+    cur_row += 2  # Leave blank rows
 
-    note_headers = ["Particulars", "As per ROI", "As per 143(1)",
-                    "As per 143(3) r.w.s. 154", "Corrected Computation"]
+    note_start = cur_row
+    _cell(ws, cur_row, 1,
+          "Note-1 : Calculation of tax liability as per Normal provisions", bold=True)
+    cur_row += 1
+
+    # Note headers
+    note_headers = ["Particulars", "As per ROI"]
+    if has_143_1:
+        note_headers.append("As per 143(1)")
+    note_headers.append("As per 143(3)")
+    if has_cita:
+        note_headers.append("As per CIT(A)\nu/s 250")
+    note_headers.append("Corrected\nComputation")
     for i, h in enumerate(note_headers, 1):
-        _cell(ws, 65, i, h, bold=True)
+        _cell(ws, cur_row, i, h, bold=True)
+    cur_row += 1
 
-    # Tax at normal rates (22% for 115BAA companies)
-    _cell(ws, 66, 1, "Tax at normal rates")
-    for col in ("B", "C", "D", "E"):
-        _cell(ws, 66, ord(col) - 64, f"={col}34*22%", num_fmt=NUM_FMT)
+    # Build column list for Note-1 formulas
+    note_cols = [cl(COL_ROI), cl(COL_C3)]
+    if has_143_1:
+        note_cols.insert(1, cl(COL_C1))
+    if has_cita:
+        note_cols.append(cl(COL_CITA))
+    note_cols.append(cl(COL_CORRECTED))
 
-    _cell(ws, 67, 1, "Tax at special rates")
-    _cell(ws, 67, 2, 0, num_fmt=NUM_FMT)
-    _cell(ws, 67, 3, "=B67", num_fmt=NUM_FMT)
-    _cell(ws, 67, 4, 0, num_fmt=NUM_FMT)
-    _cell(ws, 67, 5, 0, num_fmt=NUM_FMT)
+    # Tax at normal rates
+    tax_normal_row = cur_row
+    _cell(ws, cur_row, 1, "Tax at normal rates")
+    for nc in note_cols:
+        col_idx = ord(nc) - 64 if len(nc) == 1 else None
+        if col_idx:
+            rate_str = n_roi_str if col_idx == COL_ROI else n_str
+            _cell(ws, cur_row, col_idx, f"={nc}{ti_row}*{rate_str}", num_fmt=NUM_FMT)
+    cur_row += 1
 
-    _cell(ws, 68, 1, "Total", bold=True)
-    for col in ("B", "C", "D", "E"):
-        _cell(ws, 68, ord(col) - 64, f"=SUM({col}66:{col}67)", bold=True, num_fmt=NUM_FMT)
+    # Tax at special rates
+    tax_special_row = cur_row
+    _cell(ws, cur_row, 1, "Tax at special rates")
+    _cell(ws, cur_row, COL_ROI, 0, num_fmt=NUM_FMT)
+    if has_143_1:
+        _cell(ws, cur_row, COL_C1, f"={b}{cur_row}", num_fmt=NUM_FMT)
+    _cell(ws, cur_row, COL_C3, 0, num_fmt=NUM_FMT)
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA, 0, num_fmt=NUM_FMT)
+    _cell(ws, cur_row, COL_CORRECTED, 0, num_fmt=NUM_FMT)
+    cur_row += 1
 
-    _cell(ws, 70, 1, "Surcharge @ 10%")
-    for col in ("B", "C", "D", "E"):
-        _cell(ws, 70, ord(col) - 64, f"={col}68*10%", num_fmt=NUM_FMT)
+    # Total Normal Tax
+    tax_total_normal_row = cur_row
+    _cell(ws, cur_row, 1, "Total Tax as per Normal Provisions")
+    for nc in note_cols:
+        col_idx = ord(nc) - 64 if len(nc) == 1 else None
+        if col_idx:
+            _cell(ws, cur_row, col_idx,
+                  f"=SUM({nc}{tax_normal_row}:{nc}{tax_special_row})",
+                  num_fmt=NUM_FMT)
+    cur_row += 1
 
-    _cell(ws, 71, 1, "Cess @ 4%")
-    for col in ("B", "C", "D", "E"):
-        _cell(ws, 71, ord(col) - 64, f"=({col}70+{col}68)*4%", num_fmt=NUM_FMT)
+    # Tax u/s 115JB
+    tax_115jb_row = cur_row
+    _cell(ws, cur_row, 1, "Tax u/s 115JB (MAT)")
+    for nc in note_cols:
+        col_idx = ord(nc) - 64 if len(nc) == 1 else None
+        if col_idx:
+            _cell(ws, cur_row, col_idx, f"={nc}{mat_inc_row}*{m_str}", num_fmt=NUM_FMT)
+    cur_row += 1
 
-    _cell(ws, 72, 1, "Total", bold=True)
-    for col in ("B", "C", "D", "E"):
-        _cell(ws, 72, ord(col) - 64, f"=+{col}70+{col}71+{col}68", bold=True, num_fmt=NUM_FMT)
+    # Higher of Normal or 115JB
+    tax_higher_row = cur_row
+    _cell(ws, cur_row, 1, "Tax (Higher of Normal or 115JB)", bold=True)
+    for nc in note_cols:
+        col_idx = ord(nc) - 64 if len(nc) == 1 else None
+        if col_idx:
+            _cell(ws, cur_row, col_idx,
+                  f"=MAX({nc}{tax_total_normal_row},{nc}{tax_115jb_row})",
+                  bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
+
+    # Skip a row
+    cur_row += 1
+
+    # Surcharge
+    surcharge_row = cur_row
+    _cell(ws, cur_row, 1, f"Surcharge @ {s_str}")
+    for nc in note_cols:
+        col_idx = ord(nc) - 64 if len(nc) == 1 else None
+        if col_idx:
+            _cell(ws, cur_row, col_idx,
+                  f"={nc}{tax_higher_row}*{s_str}", num_fmt=NUM_FMT)
+    cur_row += 1
+
+    # Cess
+    cess_row = cur_row
+    _cell(ws, cur_row, 1, f"Cess @ {c_str}")
+    for nc in note_cols:
+        col_idx = ord(nc) - 64 if len(nc) == 1 else None
+        if col_idx:
+            _cell(ws, cur_row, col_idx,
+                  f"=({nc}{surcharge_row}+{nc}{tax_higher_row})*{c_str}",
+                  num_fmt=NUM_FMT)
+    cur_row += 1
+
+    # Grand total
+    grand_total_row = cur_row
+    _cell(ws, cur_row, 1, "Gross Tax Liability (Total)", bold=True)
+    for nc in note_cols:
+        col_idx = ord(nc) - 64 if len(nc) == 1 else None
+        if col_idx:
+            _cell(ws, cur_row, col_idx,
+                  f"=+{nc}{surcharge_row}+{nc}{cess_row}+{nc}{tax_higher_row}",
+                  bold=True, num_fmt=NUM_FMT)
+    cur_row += 1
+
+    # ── Now fill in the Tax reference row with Note-1 total ──
+    _cell(ws, tax_ref_row, COL_ROI,
+          f"={b}{grand_total_row}", bold=True, num_fmt=NUM_FMT)
+    if has_143_1:
+        _cell(ws, tax_ref_row, COL_C1,
+              f"={c}{grand_total_row}", bold=True, num_fmt=NUM_FMT)
+    _cell(ws, tax_ref_row, COL_C3,
+          f"={d}{grand_total_row}", bold=True, num_fmt=NUM_FMT)
+    if has_cita:
+        e = cl(COL_CITA)
+        _cell(ws, tax_ref_row, COL_CITA,
+              f"={e}{grand_total_row}", bold=True, num_fmt=NUM_FMT)
 
     # ── Apply number format to all data cells ────────────────
-    for row in range(8, 73):
-        for col in range(2, 6):
-            c = ws.cell(row, col)
-            if c.value is not None and not c.number_format.startswith("DD"):
-                if c.number_format == "General":
-                    c.number_format = NUM_FMT
-            c.alignment = _align()
-            if not c.font.name:
-                c.font = _font()
+    max_col = len(headers)
+    for row in range(8, cur_row + 1):
+        for col in range(2, max_col + 1):
+            c_cell = ws.cell(row, col)
+            if c_cell.value is not None and not c_cell.number_format.startswith("DD"):
+                if c_cell.number_format == "General":
+                    c_cell.number_format = NUM_FMT
+            c_cell.alignment = _align()
+            if not c_cell.font.name:
+                c_cell.font = _font()
 
     # ── Save ─────────────────────────────────────────────────
     if progress_cb:

@@ -324,7 +324,8 @@ def start_scrutiny():
     - computation_sheet (required PDF)
     - intimation_order (required PDF)
     - intimation_password (required string)
-    - assessment_order (optional PDF)
+    - assessment_order (required PDF)
+    - cita_order (optional PDF — CIT(A) order u/s 250)
     """
     if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
         return jsonify({"error": "Gemini API key is not configured. "
@@ -346,11 +347,16 @@ def start_scrutiny():
 
     # Validate password
     intim_password = request.form.get("intimation_password", "").strip()
-    if not intim_password:
-        return jsonify({"error": "Password for Intimation Order PDF is required."}), 400
 
-    # Optional assessment order
-    ao_file = request.files.get("assessment_order")
+    # Validate assessment order (required)
+    if "assessment_order" not in request.files:
+        return jsonify({"error": "Assessment Order PDF is required."}), 400
+    ao_file = request.files["assessment_order"]
+    if not ao_file.filename or not ao_file.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "Assessment Order must be a PDF file."}), 400
+
+    # Optional CIT(A) order
+    cita_file = request.files.get("cita_order")
 
     # Save files
     job_id = str(uuid.uuid4())
@@ -361,13 +367,17 @@ def start_scrutiny():
     intim_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_intim.pdf")
     intim_file.save(intim_path)
 
-    ao_path = None
-    if ao_file and ao_file.filename and ao_file.filename.lower().endswith(".pdf"):
-        ao_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_ao.pdf")
-        ao_file.save(ao_path)
+    ao_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_ao.pdf")
+    ao_file.save(ao_path)
+
+    cita_path = None
+    if cita_file and cita_file.filename and cita_file.filename.lower().endswith(".pdf"):
+        cita_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_cita.pdf")
+        cita_file.save(cita_path)
 
     logger.info(f"Scrutiny files uploaded: comp={comp_file.filename}, "
-                f"intim={intim_file.filename}, ao={ao_file.filename if ao_file else 'N/A'}")
+                f"intim={intim_file.filename}, ao={ao_file.filename}, "
+                f"cita={cita_file.filename if cita_file else 'N/A'}")
 
     # Initialize job
     with _jobs_lock:
@@ -382,6 +392,7 @@ def start_scrutiny():
             "intim_path": intim_path,
             "intim_password": intim_password,
             "ao_path": ao_path,
+            "cita_path": cita_path,
             "output_excel": None,
             "started_at": datetime.now().isoformat(),
         }
@@ -442,7 +453,8 @@ def _run_scrutiny(job_id: str):
         comp_path = job["comp_path"]
         intim_path = job["intim_path"]
         intim_password = job["intim_password"]
-        ao_path = job.get("ao_path")
+        ao_path = job["ao_path"]
+        cita_path = job.get("cita_path")
 
         output_path = os.path.join(OUTPUT_DIR, f"{job_id}_order_scrutiny.xlsx")
 
@@ -453,6 +465,7 @@ def _run_scrutiny(job_id: str):
             intim_password=intim_password,
             ao_path=ao_path,
             output_path=output_path,
+            cita_path=cita_path,
             progress_callback=lambda stage, detail, pct: _update_job(
                 job_id, stage=stage, detail=detail, progress=pct
             ),
@@ -474,7 +487,7 @@ def _run_scrutiny(job_id: str):
 
     finally:
         # Clean up uploaded files
-        for key in ("comp_path", "intim_path", "ao_path"):
+        for key in ("comp_path", "intim_path", "ao_path", "cita_path"):
             try:
                 path = _jobs.get(job_id, {}).get(key)
                 if path and os.path.exists(path):
