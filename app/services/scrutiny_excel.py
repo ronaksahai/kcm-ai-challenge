@@ -90,7 +90,6 @@ def _match_ground_to_addition(grounds: list, addition: dict) -> dict | None:
     add_amount = addition.get("amount", 0)
 
     for g in grounds:
-        g_desc = (g.get("addition_description") or g.get("description") or "").lower()
         g_section = (g.get("section") or "").lower()
         g_amount = g.get("addition_amount", 0)
 
@@ -98,9 +97,12 @@ def _match_ground_to_addition(grounds: list, addition: dict) -> dict | None:
         if add_section and g_section and add_section == g_section:
             return g
         # Match by amount
-        if add_amount and g_amount and abs(add_amount - g_amount) < 2:
+        if add_amount and g_amount and abs(abs(add_amount) - abs(g_amount)) < 2:
             return g
-        # Match by keyword overlap in descriptions
+
+    # If no exact match, fallback to keyword overlap
+    for g in grounds:
+        g_desc = (g.get("addition_description") or g.get("description") or "").lower()
         add_words = set(add_desc.split())
         g_words = set(g_desc.split())
         overlap = add_words & g_words
@@ -108,9 +110,9 @@ def _match_ground_to_addition(grounds: list, addition: dict) -> dict | None:
         common = {"of", "in", "the", "u/s", "us", "respect", "issue", "variation",
                   "addition", "disallowance", "add", "on", "and", "for", "to", "a",
                   "an", "as", "by", "at", "with", "from", "is", "was", "rs.", "rs",
-                  "amount", "total"}
+                  "amount", "total", "income", "interest"}
         meaningful = overlap - common
-        if len(meaningful) >= 2:
+        if len(meaningful) >= 3:
             return g
 
     return None
@@ -342,7 +344,7 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
             matched = (_match_ground_to_addition(grounds_list, a)
                        if grounds_list else None)
             remark = desc
-            cita_cell_val = None
+            cita_cell_val = amt  # Default: copy addition as-is to CIT(A) column
 
             if matched:
                 status = matched.get("status", "")
@@ -371,7 +373,8 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
                 if matched.get("remarks"):
                     remark += f". {matched['remarks']}"
 
-            _cell(ws, row, 1, f"Add: {desc}")
+            label = f"Add: {desc}" if amt >= 0 else f"Less: {desc}"
+            _cell(ws, row, 1, label)
             _cell(ws, row, COL_C3, amt, num_fmt=NUM_FMT)
             if has_cita and cita_cell_val is not None:
                 _cell(ws, row, COL_CITA, cita_cell_val,
@@ -379,18 +382,6 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
             if remark:
                 _cell(ws, row, COL_REMARKS, remark)
             row += 1
-
-        # Calculate unaccounted difference to match computation sheet
-        c3_total = _val(c3, head_key)
-        base_total = _val(base_data, head_key)
-        if c3_total is not None and base_total is not None:
-            diff = c3_total - (base_total + sum_adds)
-            if diff != 0:
-                label = "Add: Other unaccounted adjustments as per computation sheet" if diff > 0 else "Less: Other unaccounted reductions as per computation sheet"
-                _cell(ws, row, 1, label)
-                _cell(ws, row, COL_C3, diff, num_fmt=NUM_FMT)
-                _cell(ws, row, COL_REMARKS, "Balancing figure to match computation sheet total")
-                row += 1
 
         return row
 
@@ -442,6 +433,24 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     os_adds = additions_by_head.get("Other Sources", [])
     if os_adds or _val(c3, "income_other_sources") != _val(base_data, "income_other_sources"):
         cur_row = _write_addition_rows(cur_row, os_adds, grounds, "income_other_sources")
+
+    # ── Overall Balancing Figure ─────────────────────────────
+    sum_base = sum(_val(base_data, k) or 0 for k in [
+        "income_house_property", "income_business_profession",
+        "income_capital_gains", "income_other_sources"
+    ])
+    sum_adds = sum((a.get("amount") or 0) for a in additions)
+    expected_sum_of_heads = (_val(c3, "gross_total_income") or 0) + (_val(c3, "current_year_loss_setoff") or 0) + (_val(c3, "brought_forward_loss_setoff") or 0)
+
+    overall_diff = expected_sum_of_heads - (sum_base + sum_adds)
+    if overall_diff != 0:
+        label = "Add: Other unaccounted adjustments as per computation sheet" if overall_diff > 0 else "Less: Other unaccounted reductions as per computation sheet"
+        _cell(ws, cur_row, 1, label)
+        _cell(ws, cur_row, COL_C3, overall_diff, num_fmt=NUM_FMT)
+        if has_cita:
+            _cell(ws, cur_row, COL_CITA, overall_diff, num_fmt=NUM_FMT)
+        _cell(ws, cur_row, COL_REMARKS, "Balancing figure to match Gross Total Income in computation sheet")
+        cur_row += 1
 
     # ── Loss Setoffs ─────────────────────────────────────────
     cy_row = cur_row
@@ -668,11 +677,17 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     cur_row += 1
 
     tax_paid_start = cur_row
+    
+    # We use hardcoded values here because pre-paid taxes don't use formulas based on income.
+    tds_roi = _val(roi, "tds")
+    tds_c1 = _val(c1, "tds") if has_143_1 else None
+    tds_c3 = _val(c3, "tds")
+
     data_row(cur_row, "         Tax Deducted at Source",
-             "tds", "tds", "tds", auto_remark=True)
-    if has_cita:
-        _cell(ws, cur_row, COL_CITA,
-              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+             roi_val=tds_roi,
+             c1_val=tds_c1,
+             c3_val=tds_c3,
+             cita_val=tds_c3 if has_cita else None)
     cur_row += 1
 
     data_row(cur_row, "         Tax Collected at Source",
@@ -737,14 +752,17 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
 
     # Interest 244A
     int244a_row = cur_row
-    _cell(ws, cur_row, 1, "Add: Interest u/s 244A (As per separate sheet attached)")
-    cols_to_fill = [COL_ROI, COL_C3]
-    if has_143_1:
-        cols_to_fill.insert(1, COL_C1)
-    for col in cols_to_fill:
-        _cell(ws, cur_row, col, 0, bold=True, num_fmt=NUM_FMT)
-    if has_cita:
-        _cell(ws, cur_row, COL_CITA, 0, bold=True, num_fmt=NUM_FMT)
+    # Interest u/s 244A is granted by the revenue upon processing. It is never claimed in the ROI.
+    # We explicitly set ROI to 0 so we don't accidentally copy hallucinations from the 143(1) column.
+    int244a_roi = 0
+    int244a_c1 = _val(c1, "interest_244a") if has_143_1 else None
+    int244a_c3 = _val(c3, "interest_244a")
+
+    data_row(cur_row, "Add: Interest u/s 244A (As per separate sheet attached)",
+             roi_val=int244a_roi,
+             c1_val=int244a_c1,
+             c3_val=int244a_c3,
+             cita_val=int244a_c3 if has_cita else None)
     cur_row += 1
 
     # Refund Already Issued
@@ -801,16 +819,19 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     # ── Calculate Dynamic Rates ───────────────────────────────
     def _calculate_rates(sources):
         """Deduce tax/surcharge/cess rates from extracted data.
-        Returns (n_rate, n_roi_rate, m_rate, s_rate, c_rate) as clean floats
-        plus formatted percentage strings for Excel formulas.
+        Returns multiple rates as clean floats plus formatted percentage strings.
         """
-        n_rate = n_roi_rate = m_rate = s_rate = c_rate = 0.0
+        n_rate = n_roi_rate = m_rate = 0.0
+        s_rate = s_roi_rate = 0.0
+        c_rate = c_roi_rate = 0.0
 
         for data in sources:
             if not data:
                 continue
+            
+            is_roi = (data is roi) or (has_143_1 and data is c1)
 
-            # MAT Rate (most reliable — income_115jb is always present)
+            # MAT Rate
             if m_rate == 0:
                 inc_mat = _val(data, "income_115jb")
                 tax_mat = _val(data, "tax_115jb")
@@ -818,29 +839,41 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
                     m_rate = tax_mat / inc_mat
 
             # Surcharge Rate
-            if s_rate == 0:
-                surcharge = _val(data, "surcharge_total")
-                tax_base = max(
-                    _val(data, "tax_normal_rates") or _val(data, "tax_on_total_income") or 0,
-                    _val(data, "tax_115jb") or 0,
-                )
-                if tax_base and surcharge:
-                    s_rate = surcharge / tax_base
+            surcharge = _val(data, "surcharge_total")
+            tax_base = max(
+                _val(data, "tax_normal_rates") or _val(data, "tax_on_total_income") or 0,
+                _val(data, "tax_115jb") or 0,
+            )
+            if tax_base and surcharge:
+                computed_s_rate = surcharge / tax_base
+                if is_roi and s_roi_rate == 0:
+                    s_roi_rate = computed_s_rate
+                elif not is_roi and s_rate == 0:
+                    s_rate = computed_s_rate
 
             # Cess Rate
-            if c_rate == 0:
-                cess = _val(data, "cess")
-                surcharge_v = _val(data, "surcharge_total") or 0
-                tax_base = max(
-                    _val(data, "tax_normal_rates") or _val(data, "tax_on_total_income") or 0,
-                    _val(data, "tax_115jb") or 0,
-                )
-                if cess and (tax_base + surcharge_v):
-                    c_rate = cess / (tax_base + surcharge_v)
+            cess = _val(data, "cess")
+            surcharge_v = _val(data, "surcharge_total") or 0
+            if cess and (tax_base + surcharge_v):
+                computed_c_rate = cess / (tax_base + surcharge_v)
+                if is_roi and c_roi_rate == 0:
+                    c_roi_rate = computed_c_rate
+                elif not is_roi and c_rate == 0:
+                    c_rate = computed_c_rate
 
-            # Normal Rate — compute from every source so we can
-            # detect the ROI rate vs the 143(3) rate
-            inc_normal = _val(data, "income_normal_rates") or _val(data, "total_income")
+            # Normal Rate
+            inc_normal_raw = data.get("income_normal_rates")
+            if inc_normal_raw is not None and inc_normal_raw != 0:
+                inc_normal = inc_normal_raw
+            elif inc_normal_raw == 0:
+                inc_normal = 0
+                if data is roi:
+                    n_roi_rate = 0.0
+                elif n_rate == 0:
+                    n_rate = 0.0
+            else:
+                inc_normal = _val(data, "total_income")
+            
             tax_normal = _val(data, "tax_normal_rates") or _val(data, "tax_on_total_income")
             if inc_normal and tax_normal:
                 computed_rate = tax_normal / inc_normal
@@ -852,20 +885,23 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
         # Fallbacks
         m_rate = m_rate if m_rate else 0.185
         s_rate = s_rate if s_rate else 0.0
+        s_roi_rate = s_roi_rate if s_roi_rate else s_rate
         c_rate = c_rate if c_rate else 0.04
+        c_roi_rate = c_roi_rate if c_roi_rate else c_rate
         n_rate = n_rate if n_rate else 0.30
         n_roi_rate = n_roi_rate if n_roi_rate else n_rate
 
-        # Round to clean percentages for Excel formula strings
+        # Round to nearest 0.5%
         def _snap(r):
-            """Snap floating point to nearest 0.5% increment."""
             pct = r * 100
-            snapped = round(pct * 2) / 2  # nearest 0.5
+            snapped = round(pct * 2) / 2
             return snapped / 100
 
         m_rate = _snap(m_rate)
         s_rate = _snap(s_rate)
+        s_roi_rate = _snap(s_roi_rate)
         c_rate = _snap(c_rate)
+        c_roi_rate = _snap(c_roi_rate)
         n_rate = _snap(n_rate)
         n_roi_rate = _snap(n_roi_rate)
 
@@ -873,11 +909,11 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
             v = r * 100
             return f"{v:g}%"
 
-        return (n_rate, n_roi_rate, m_rate, s_rate, c_rate,
-                fmt(n_rate), fmt(n_roi_rate), fmt(m_rate), fmt(s_rate), fmt(c_rate))
+        return (n_rate, n_roi_rate, m_rate, s_rate, s_roi_rate, c_rate, c_roi_rate,
+                fmt(n_rate), fmt(n_roi_rate), fmt(m_rate), fmt(s_rate), fmt(s_roi_rate), fmt(c_rate), fmt(c_roi_rate))
 
-    (n_val, n_roi_val, m_val, s_val, c_val,
-     n_str, n_roi_str, m_str, s_str, c_str) = _calculate_rates([roi, c1, c3])
+    (n_val, n_roi_val, m_val, s_val, s_roi_val, c_val, c_roi_val,
+     n_str, n_roi_str, m_str, s_str, s_roi_str, c_str, c_roi_str) = _calculate_rates([roi, c1, c3])
 
     # ── Note-1: Calculation of Tax ───────────────────────────
     if progress_cb:
@@ -968,22 +1004,26 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
 
     # Surcharge
     surcharge_row = cur_row
-    _cell(ws, cur_row, 1, f"Surcharge @ {s_str}")
+    rate_text = f"{s_str}" if s_str == s_roi_str else f"ROI: {s_roi_str}, 143(3): {s_str}"
+    _cell(ws, cur_row, 1, f"Surcharge @ {rate_text}")
     for nc in note_cols:
         col_idx = ord(nc) - 64 if len(nc) == 1 else None
         if col_idx:
+            s_rate_str = s_roi_str if col_idx in [COL_ROI, COL_C1] else s_str
             _cell(ws, cur_row, col_idx,
-                  f"={nc}{tax_higher_row}*{s_str}", num_fmt=NUM_FMT)
+                  f"={nc}{tax_higher_row}*{s_rate_str}", num_fmt=NUM_FMT)
     cur_row += 1
 
     # Cess
     cess_row = cur_row
-    _cell(ws, cur_row, 1, f"Cess @ {c_str}")
+    rate_text = f"{c_str}" if c_str == c_roi_str else f"ROI: {c_roi_str}, 143(3): {c_str}"
+    _cell(ws, cur_row, 1, f"Cess @ {rate_text}")
     for nc in note_cols:
         col_idx = ord(nc) - 64 if len(nc) == 1 else None
         if col_idx:
+            c_rate_str = c_roi_str if col_idx in [COL_ROI, COL_C1] else c_str
             _cell(ws, cur_row, col_idx,
-                  f"=({nc}{surcharge_row}+{nc}{tax_higher_row})*{c_str}",
+                  f"=({nc}{surcharge_row}+{nc}{tax_higher_row})*{c_rate_str}",
                   num_fmt=NUM_FMT)
     cur_row += 1
 

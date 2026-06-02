@@ -357,6 +357,9 @@ def start_scrutiny():
 
     # Optional CIT(A) order
     cita_file = request.files.get("cita_order")
+    
+    # Optional CIT(A) computation sheet
+    cita_comp_file = request.files.get("cita_comp_sheet")
 
     # Save files
     job_id = str(uuid.uuid4())
@@ -375,9 +378,15 @@ def start_scrutiny():
         cita_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_cita.pdf")
         cita_file.save(cita_path)
 
+    cita_comp_path = None
+    if cita_comp_file and cita_comp_file.filename and cita_comp_file.filename.lower().endswith(".pdf"):
+        cita_comp_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_cita_comp.pdf")
+        cita_comp_file.save(cita_comp_path)
+
     logger.info(f"Scrutiny files uploaded: comp={comp_file.filename}, "
                 f"intim={intim_file.filename}, ao={ao_file.filename}, "
-                f"cita={cita_file.filename if cita_file else 'N/A'}")
+                f"cita={cita_file.filename if cita_file else 'N/A'}, "
+                f"cita_comp={cita_comp_file.filename if cita_comp_file else 'N/A'}")
 
     # Initialize job
     with _jobs_lock:
@@ -393,6 +402,7 @@ def start_scrutiny():
             "intim_password": intim_password,
             "ao_path": ao_path,
             "cita_path": cita_path,
+            "cita_comp_path": cita_comp_path,
             "output_excel": None,
             "started_at": datetime.now().isoformat(),
         }
@@ -455,6 +465,7 @@ def _run_scrutiny(job_id: str):
         intim_password = job["intim_password"]
         ao_path = job["ao_path"]
         cita_path = job.get("cita_path")
+        cita_comp_path = job.get("cita_comp_path")
 
         output_path = os.path.join(OUTPUT_DIR, f"{job_id}_order_scrutiny.xlsx")
 
@@ -466,6 +477,7 @@ def _run_scrutiny(job_id: str):
             ao_path=ao_path,
             output_path=output_path,
             cita_path=cita_path,
+            cita_comp_path=cita_comp_path,
             progress_callback=lambda stage, detail, pct: _update_job(
                 job_id, stage=stage, detail=detail, progress=pct
             ),

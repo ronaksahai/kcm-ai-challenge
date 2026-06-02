@@ -3,6 +3,8 @@ Order Scrutiny — PDF Data Extraction
 Uses PyPDF2 for text extraction and Google Gemini for structured parsing.
 """
 
+import os
+import tempfile
 import json
 import logging
 import PyPDF2
@@ -24,10 +26,12 @@ def _get_client():
     return _client
 
 
-def _ask_gemini(prompt: str) -> dict:
-    """Send prompt to Gemini and parse JSON response, with retry and fallback."""
+def _ask_gemini(prompt: str, pdf_path: str = None) -> dict:
+    """Send prompt to Gemini and parse JSON response, with retry and fallback.
+    If pdf_path is provided, uploads the PDF natively (useful for scanned/image PDFs).
+    """
     import time
-    from google.genai import errors
+    from google.genai import errors, types
     client = _get_client()
     
     models_to_try = [GEMINI_MODEL]
@@ -35,37 +39,52 @@ def _ask_gemini(prompt: str) -> dict:
         models_to_try.append("gemini-2.5-flash")
 
     max_retries = 3
+    uploaded_file = None
     
-    for model_name in models_to_try:
-        for attempt in range(max_retries):
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.1,
-                    ),
-                )
-                return json.loads(response.text)
-            except errors.APIError as e:
-                if "503" in str(e) or getattr(e, 'code', None) == 503:
-                    if attempt < max_retries - 1:
-                        sleep_time = 2 ** attempt
-                        logger.warning(f"Model {model_name} overloaded (503). Retrying in {sleep_time}s...")
-                        time.sleep(sleep_time)
-                        continue
+    try:
+        if pdf_path:
+            logger.info("Uploading PDF natively to Gemini...")
+            uploaded_file = client.files.upload(file=pdf_path)
+            contents = [prompt, uploaded_file]
+        else:
+            contents = prompt
+
+        for model_name in models_to_try:
+            for attempt in range(max_retries):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.1,
+                        ),
+                    )
+                    return json.loads(response.text)
+                except errors.APIError as e:
+                    if "503" in str(e) or getattr(e, 'code', None) == 503:
+                        if attempt < max_retries - 1:
+                            sleep_time = 2 ** attempt
+                            logger.warning(f"Model {model_name} overloaded (503). Retrying in {sleep_time}s...")
+                            time.sleep(sleep_time)
+                            continue
+                        else:
+                            logger.error(f"Model {model_name} overloaded (503). Exhausted retries.")
+                            break  # Fall back to next model
                     else:
-                        logger.error(f"Model {model_name} overloaded (503). Exhausted retries.")
-                        break  # Fall back to next model
-                else:
-                    logger.error(f"API Error with model {model_name}: {e}")
-                    break  # Fall back on other API errors (like 404)
+                        logger.error(f"API Error with model {model_name}: {e}")
+                        break  # Fall back on other API errors (like 404)
+                except Exception as e:
+                    logger.error(f"Unexpected error with model {model_name}: {e}")
+                    break
+                    
+        raise RuntimeError(f"Failed to generate content with Gemini API. Please try again later.")
+    finally:
+        if uploaded_file:
+            try:
+                client.files.delete(name=uploaded_file.name)
             except Exception as e:
-                logger.error(f"Unexpected error with model {model_name}: {e}")
-                break
-                
-    raise RuntimeError(f"Failed to generate content with Gemini API. Please try again later.")
+                logger.error(f"Failed to clean up uploaded file: {e}")
 
 
 # ── PDF Text Extraction ─────────────────────────────────────
@@ -181,7 +200,25 @@ def extract_computation_sheet(pdf_path: str, progress_cb=None) -> dict:
     if progress_cb:
         progress_cb("extracting", "Parsing Computation Sheet with AI...", 0.2)
 
-    data = _ask_gemini(COMP_SHEET_PROMPT + text)
+    if len(text.strip()) < 500:
+        logger.warning(f"Computation Sheet text is too short ({len(text)} chars). Falling back to native PDF upload.")
+        reader = PyPDF2.PdfReader(pdf_path)
+        if reader.is_encrypted:
+            reader.decrypt("")
+        writer = PyPDF2.PdfWriter()
+        for page in reader.pages:
+            writer.add_page(page)
+        import tempfile, os
+        temp_fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+        with os.fdopen(temp_fd, 'wb') as f:
+            writer.write(f)
+        data = _ask_gemini(COMP_SHEET_PROMPT, pdf_path=temp_path)
+        os.remove(temp_path)
+    else:
+        data = _ask_gemini(COMP_SHEET_PROMPT + text)
+
+    if not isinstance(data, dict):
+        data = {}
     logger.info(f"Computation Sheet parsed: {data.get('entity_name')}, AY {data.get('assessment_year')}")
     return data
 
@@ -215,6 +252,8 @@ Required JSON keys:
     "deduction_10aa": number,
     "total_income": number,
     "loss_carried_forward": number,
+    "income_normal_rates": number,
+    "income_special_rates": number,
     "tax_normal_rates": number,
     "tax_on_total_income": number,
     "income_115jb": number,
@@ -236,7 +275,8 @@ Required JSON keys:
     "self_assessment_tax": number,
     "regular_tax": number,
     "total_taxes_paid": number,
-    "refund_amount": number
+    "refund_amount": number,
+    "interest_244a": number
   },
   "computed": {
     "income_house_property": number,
@@ -252,6 +292,8 @@ Required JSON keys:
     "deduction_10aa": number,
     "total_income": number,
     "loss_carried_forward": number,
+    "income_normal_rates": number,
+    "income_special_rates": number,
     "tax_normal_rates": number,
     "tax_on_total_income": number,
     "income_115jb": number,
@@ -283,7 +325,21 @@ Important:
 - "roi" = "As provided by Taxpayer" column
 - "computed" = "As Computed u/s 143(1)" column
 - Parse Indian numbers: 2,32,53,22,706 = 2325322706
-- The intimation has detailed line items (sl.no 01 through 46)
+- The intimation has detailed line items (sl.no 01 through ~50)
+- "income_normal_rates" = the INCOME CHARGEABLE TO TAX AT NORMAL RATES (sl.no ~15). THIS WILL BE EXACTLY 0 if the document shows 0. Do not confuse it with "TAX AT NORMAL RATES".
+- "income_special_rates" = the INCOME CHARGEABLE TO TAX AT SPECIAL RATES (sl.no ~14).
+- "tax_normal_rates" = TAX AT NORMAL RATES (sl.no ~16 or ~24).
+- "surcharge_total" = SURCHARGE (sl.no ~26).
+- "cess" = EDUCATION CESS (sl.no ~27).
+- "interest_234b" = INTEREST U/S 234B (sl.no ~35).
+- "tds" = TDS / Tax Deducted at Source (sl.no ~42).
+- "tcs" = TCS / Tax Collected at Source (sl.no ~43).
+- "advance_tax" = ADVANCE TAX (sl.no ~44).
+- "self_assessment_tax" = SELF ASSESSMENT TAX (sl.no ~44).
+- "total_taxes_paid" = TOTAL TAXES PAID (sl.no ~45). Extract the EXACT number written on the document. DO NOT try to recalculate it yourself.
+- "interest_244a" = INTEREST U/S 244A ON REFUND (sl.no ~49).
+- CAUTION: In the PDF text, the numeric values (like Surcharge, Cess, Interest) are often printed in a separate block FAR below their text labels. The order of numbers typically matches the order of labels. Use contextual clues to map them correctly!
+- The PDF text may have Hindi characters mixed in. Focus on the English text and numbers to extract values.
 
 PDF Text:
 """
@@ -294,24 +350,129 @@ def extract_intimation_order(pdf_path: str, password: str, progress_cb=None) -> 
     if progress_cb:
         progress_cb("extracting", "Reading Intimation Order...", 0.3)
 
-    # Extract all text to check if it's an ITR
+    # Detect whether this is an Intimation Order vs an ITR filing.
+    # Intimation orders contain "Intimation u/s" and "Document Identification No."
     full_text = _extract_pdf_text(pdf_path, password)
+    first_text = full_text.upper()[:2000]
     
-    if "INDIAN INCOME TAX RETURN" in full_text.upper()[:2000] or "ITR" in full_text[:1000] or "PART A-GEN" in full_text.upper()[:1000]:
-        text = full_text
-        logger.info(f"ITR detected: extracted {len(text)} chars")
-    else:
+    is_intimation = (
+        "INTIMATION U/S" in first_text
+        or "DOCUMENT IDENTIFICATION NO" in first_text
+    )
+    
+    if is_intimation:
         text = _extract_english_pages(pdf_path, password)
         if not text.strip():
             # Fallback: try all pages
             text = full_text
-        logger.info(f"Intimation Order: extracted {len(text)} chars (English pages)")
+        logger.info(f"Intimation Order detected: extracted {len(text)} chars (English pages)")
+    else:
+        text = full_text
+        logger.info(f"ITR detected: extracted {len(text)} chars")
 
     if progress_cb:
         progress_cb("extracting", "Parsing Intimation Order with AI...", 0.4)
 
-    data = _ask_gemini(INTIMATION_PROMPT + text)
+    if len(text.strip()) < 500:
+        logger.warning(f"Intimation Order text is too short ({len(text)} chars). Falling back to native PDF upload.")
+        # Create an unencrypted copy if necessary
+        reader = PyPDF2.PdfReader(pdf_path)
+        if reader.is_encrypted:
+            reader.decrypt(password)
+            writer = PyPDF2.PdfWriter()
+            for page in reader.pages:
+                writer.add_page(page)
+            import tempfile, os
+            temp_fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+            with os.fdopen(temp_fd, 'wb') as f:
+                writer.write(f)
+            data = _ask_gemini(INTIMATION_PROMPT, pdf_path=temp_path)
+            os.remove(temp_path)
+        else:
+            data = _ask_gemini(INTIMATION_PROMPT, pdf_path=pdf_path)
+    else:
+        data = _ask_gemini(INTIMATION_PROMPT + text)
+        
+    if not isinstance(data, dict):
+        data = {}
     logger.info(f"Intimation parsed: {data.get('entity_name')}, AY {data.get('assessment_year')}")
+
+    # --- Robust Text Parsing Fallback for TDS ---
+    # Due to complex right-aligned columnar layouts in Intimations, Gemini often misses TDS.
+    # We parse the text explicitly by anchoring to the Gross Tax Liability label.
+    def _fallback_extract_tds(full_pdf_text):
+        lines = [line.strip() for line in full_pdf_text.split('\n') if line.strip()]
+        for i, line in enumerate(lines):
+            if "GROSS TAX LIABILITY" in line.upper() and "28=" in line.replace(" ", ""):
+                nums = []
+                for j in range(i-1, max(0, i-15), -1):
+                    val = lines[j].replace(',', '')
+                    if val.isdigit() or (val.startswith('-') and val[1:].isdigit()):
+                        nums.append(int(val))
+                if len(nums) >= 5 and nums[0] == 28:
+                    return nums[4], nums[3] # roi_tds, c1_tds
+                elif len(nums) >= 4:
+                    return nums[3], nums[2]
+        return None, None
+
+    tds_roi_override, tds_c1_override = _fallback_extract_tds(full_text)
+    if tds_roi_override is not None:
+        if data.get("roi") and isinstance(data["roi"], dict) and data["roi"].get("tds") == 0:
+            data["roi"]["tds"] = tds_roi_override
+            logger.info(f"Regex override for ROI TDS: {tds_roi_override}")
+    if tds_c1_override is not None:
+        if data.get("computed") and isinstance(data["computed"], dict) and data["computed"].get("tds") == 0:
+            data["computed"]["tds"] = tds_c1_override
+            logger.info(f"Regex override for 143(1) TDS: {tds_c1_override}")
+
+    # Post-processing: auto-correct TDS if total_taxes_paid doesn't match components
+    for section_key in ("roi", "computed"):
+        section = data.get(section_key)
+        if not section or not isinstance(section, dict):
+            continue
+        ttp = section.get("total_taxes_paid", 0) or 0
+        tds = section.get("tds", 0) or 0
+        tcs = section.get("tcs", 0) or 0
+        adv = section.get("advance_tax", 0) or 0
+        sat = section.get("self_assessment_tax", 0) or 0
+        
+        parts_sum = tds + tcs + adv + sat
+        if ttp > 0 and parts_sum != ttp:
+            # AI often misattributes the Refund Amount to Self Assessment Tax due to PDF layout.
+            # If removing SAT leaves a clean gap that fits a missing TDS, fix the hallucination.
+            gap_without_sat = ttp - (tcs + adv)
+            if gap_without_sat > 0 and tds == 0 and sat > gap_without_sat:
+                logger.info(f"Zeroing hallucinated SAT: {sat} for {section_key}")
+                sat = 0
+                section["self_assessment_tax"] = 0
+
+            gap = ttp - (tcs + adv + sat)
+            if gap > 0 and tds == 0:
+                section["tds"] = gap
+                logger.info(f"Auto-corrected {section_key} TDS: {gap} (total_taxes_paid={ttp}, advance_tax={adv})")
+
+        # Mathematical fallback for Surcharge and Cess based on Gross Tax Liability
+        gtl = section.get("gross_tax_liability", 0) or 0
+        tax_base = max(section.get("tax_normal_rates", 0) or 0, section.get("tax_115jb", 0) or 0)
+        sur = section.get("surcharge_total", 0) or 0
+        ces = section.get("cess", 0) or 0
+        
+        if gtl > 0 and tax_base > 0:
+            calc_gtl = tax_base + sur + ces
+            if calc_gtl != gtl:
+                diff = gtl - calc_gtl
+                if diff > 0:
+                    if sur == 0 and ces > 0:
+                        section["surcharge_total"] = diff
+                        logger.info(f"Auto-corrected {section_key} Surcharge: {diff} (from Gross Tax Liability)")
+                    elif ces == 0 and sur > 0:
+                        section["cess"] = diff
+                        logger.info(f"Auto-corrected {section_key} Cess: {diff} (from Gross Tax Liability)")
+                    elif sur == 0 and ces == 0:
+                        # If both are 0, we can't reliably split it without knowing rates, but we'll leave it 0
+                        # and let the Excel rate fallback handle it if needed.
+                        pass
+
     return data
 
 
@@ -321,6 +482,12 @@ AO_PROMPT = """You are an Indian Income Tax expert. Extract structured data from
 
 The Assessment Order typically contains a "Final Table of Taxable Computation" or similar computation sheet at the end.
 This table lists the income as per return, adjustments, and the total assessed income.
+
+CRITICAL RULE FOR HEAD OF INCOME TRANSFERS:
+If the Assessing Officer moves an item from one head of income to another (e.g., "interest income treated as Income from Other Sources" instead of Business Income), you MUST extract TWO separate adjustments:
+1. A REDUCTION (negative amount) from the original head of income (e.g., Business or Profession).
+2. An ADDITION (positive amount) to the new head of income (e.g., Other Sources).
+Failure to extract both sides will cause the final totals to mismatch!
 
 Return a JSON object with:
 {
@@ -341,10 +508,13 @@ Return a JSON object with:
 }
 
 Instructions:
-- In "additions", include EVERY addition/variation/disallowance listed in the computation table of the order, with non-zero amounts.
-- "description" should capture the exact wording (e.g. "Variation in respect of issue of Disallowance u/s 43B")
+- In "additions", include EVERY item that adjusts the income in the computation table of the order. This includes additions, disallowances, variations, AND exemptions/reductions/reliefs.
+- For additions, variations, and disallowances (items that increase income), "amount" must be POSITIVE (e.g., 1546181000).
+- For exemptions, reductions, and reliefs (items that decrease income, often marked "Less:"), "amount" MUST be NEGATIVE (e.g., -120796095).
+- If the AO denies or rejects a loss setoff (which effectively increases taxable income), treat it as a POSITIVE addition.
+- "description" should capture the exact wording (e.g. "Dividend income, exempt u/s 10(34/35)" or "Variation in respect of issue of Disallowance u/s 43B")
 - "head_of_income" should be the income head under which this addition falls. Most additions fall under "Business or Profession".
-- "amount" should be a plain number without commas
+- "amount" should be a plain number without commas (use the negative sign for deductions).
 - Parse Indian number format: 1,02,25,077 = 10225077, 1,85,20,733 = 18520733
 - Do NOT include totals or sub-totals as additions — only individual items
 
@@ -361,18 +531,43 @@ def extract_assessment_order(pdf_path: str, progress_cb=None) -> dict:
     logger.info(f"Assessment Order: extracted {len(text)} chars")
 
     if progress_cb:
-        progress_cb("extracting", "Parsing Assessment Order with AI...", 0.50)
+        progress_cb("extracting", "Parsing Assessment Order with AI...", 0.5)
 
-    data = _ask_gemini(AO_PROMPT + text)
+    if len(text.strip()) < 500:
+        logger.warning(f"Assessment Order text is too short ({len(text)} chars). Falling back to native PDF upload.")
+        reader = PyPDF2.PdfReader(pdf_path)
+        if reader.is_encrypted:
+            # We don't have password here, so we try decrypting with empty string or just use as is
+            reader.decrypt("")
+        writer = PyPDF2.PdfWriter()
+        for page in reader.pages:
+            writer.add_page(page)
+        temp_fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+        with os.fdopen(temp_fd, 'wb') as f:
+            writer.write(f)
+        data = _ask_gemini(AO_PROMPT, pdf_path=temp_path)
+        os.remove(temp_path)
+    else:
+        data = _ask_gemini(AO_PROMPT + text)
+        
+    if isinstance(data, list):
+        if len(data) == 1 and isinstance(data[0], dict) and "additions" in data[0]:
+            data = data[0]
+        else:
+            data = {"additions": data}
+    elif not isinstance(data, dict):
+        data = {}
     logger.info(f"Assessment Order parsed: {len(data.get('additions', []))} additions found")
     return data
 
 
 # ── CIT(A) Order Extraction (Optional) ──────────────────────
 
-CITA_PROMPT = """You are an Indian Income Tax expert. Analyze this CIT(A) order passed under section 250 of the Income Tax Act.
+CITA_PROMPT = """You are an Indian Income Tax expert. Analyze the provided text which may contain a CIT(A) order passed under section 250 of the Income Tax Act, and/or a CIT(A) Computation Sheet (Order Giving Effect / OGE).
 
-The CIT(A) order addresses an appeal filed by the Assessee against the Assessment Order. The order discusses each ground of appeal raised by the Assessee and gives a decision on each.
+The CIT(A) order discusses each ground of appeal raised by the Assessee and gives a decision on each. The Computation Sheet (OGE) calculates the revised income and lists the exact numerical relief granted for each ground.
+
+If both are provided, use the combined context to extract the grounds of appeal, their status, and the precise numerical relief amounts granted. If only the Computation Sheet (OGE) is provided, you can deduce the allowed grounds based on the "Relief allowed" section.
 
 IMPORTANT CONCEPTS:
 - "Allowed" or "Allowed in favour of assessee" = The addition made by the AO is DELETED. The assessee gets full relief.
@@ -415,18 +610,61 @@ PDF Text:
 """
 
 
-def extract_cita_order(pdf_path: str, progress_cb=None) -> dict:
-    """Extract appeal grounds and decisions from CIT(A) order u/s 250."""
+def extract_cita_order(pdf_path: str = None, cita_comp_path: str = None, progress_cb=None) -> dict:
+    """Extract appeal grounds and decisions from CIT(A) order and/or Computation Sheet."""
     if progress_cb:
-        progress_cb("extracting", "Reading CIT(A) Order...", 0.55)
+        progress_cb("extracting", "Reading CIT(A) documents...", 0.55)
 
-    text = _extract_pdf_text(pdf_path)
-    logger.info(f"CIT(A) Order: extracted {len(text)} chars")
+    text = ""
+    pdf_paths = []
+    
+    if pdf_path and os.path.exists(pdf_path):
+        order_text = _extract_pdf_text(pdf_path)
+        text += f"\n--- CIT(A) ORDER ---\n{order_text}\n"
+        pdf_paths.append(pdf_path)
+        
+    if cita_comp_path and os.path.exists(cita_comp_path):
+        comp_text = _extract_pdf_text(cita_comp_path)
+        text += f"\n--- CIT(A) COMPUTATION SHEET (OGE) ---\n{comp_text}\n"
+        pdf_paths.append(cita_comp_path)
+
+    logger.info(f"CIT(A) Documents: extracted {len(text)} chars combined")
 
     if progress_cb:
-        progress_cb("extracting", "Analyzing CIT(A) Order with AI...", 0.60)
+        progress_cb("extracting", "Analyzing CIT(A) Documents with AI...", 0.60)
 
-    data = _ask_gemini(CITA_PROMPT + text)
+    # Fallback to native PDF upload if text is very short (likely scanned image PDFs without OCR)
+    if len(text.strip()) < 500 and pdf_paths:
+        logger.warning(f"CIT(A) text is too short ({len(text)} chars). Falling back to native PDF upload.")
+        
+        # Merge all PDFs into one for the Gemini native upload
+        writer = PyPDF2.PdfWriter()
+        for p in pdf_paths:
+            reader = PyPDF2.PdfReader(p)
+            if reader.is_encrypted:
+                reader.decrypt("")
+            for page in reader.pages:
+                writer.add_page(page)
+                
+        temp_fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+        with os.fdopen(temp_fd, 'wb') as f:
+            writer.write(f)
+            
+        data = _ask_gemini(CITA_PROMPT, pdf_path=temp_path)
+        os.remove(temp_path)
+    else:
+        data = _ask_gemini(CITA_PROMPT + text)
+    
+    # Robustness: occasionally the AI returns a list.
+    if isinstance(data, list):
+        # If it's a list containing a single dict that already has 'grounds', unwrap it.
+        if len(data) == 1 and isinstance(data[0], dict) and "grounds" in data[0]:
+            data = data[0]
+        else:
+            data = {"grounds": data}
+    elif not isinstance(data, dict):
+        data = {}
+
     grounds = data.get("grounds", [])
     logger.info(
         f"CIT(A) Order parsed: {len(grounds)} grounds, "

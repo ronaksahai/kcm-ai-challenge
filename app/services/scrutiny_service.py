@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 def run_scrutiny_pipeline(comp_path: str, intim_path: str, intim_password: str,
                           ao_path: str, output_path: str,
                           cita_path: str = None,
+                          cita_comp_path: str = None,
                           progress_callback=None):
     """
     Full Order Scrutiny pipeline:
@@ -50,9 +51,9 @@ def run_scrutiny_pipeline(comp_path: str, intim_path: str, intim_password: str,
 
     # Step 4: CIT(A) Order (optional)
     cita_data = {}
-    if cita_path and os.path.exists(cita_path):
+    if cita_path or cita_comp_path:
         pcb("extracting", "Processing CIT(A) Order u/s 250...", 0.55)
-        cita_data = extract_cita_order(cita_path, progress_cb=pcb)
+        cita_data = extract_cita_order(cita_path, cita_comp_path, progress_cb=pcb)
 
     # Step 5: Generate Excel
     pcb("generating", "Generating Order Scrutiny Excel...", 0.65)

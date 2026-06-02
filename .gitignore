@@ -4,6 +4,7 @@ __pycache__/
 .env
 .DS_Store
 SampleData/
+debug/
 app/data/output/
 crashed_extracted.md
 pdf_inspection.txt

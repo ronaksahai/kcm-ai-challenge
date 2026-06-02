@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let activeModule = 'translator';
 
     // Scrutiny state
-    let scrutinyFiles = { comp: null, intim: null, ao: null, cita: null };
+    let scrutinyFiles = { comp: null, intim: null, ao: null, cita: null, cita_comp: null };
     let scrutinyJobId = null;
     let scrutinyPollInterval = null;
 
@@ -276,6 +276,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupScrutinyCard('intim');
     setupScrutinyCard('ao');
     setupScrutinyCard('cita');
+    setupScrutinyCard('citaComp');
 
     // Enable/disable generate button — comp, intim, ao, and password are all required
     intimPasswordInput.addEventListener('input', updateScrutinyButton);
@@ -297,6 +298,7 @@ document.addEventListener('DOMContentLoaded', () => {
         formData.append('intimation_password', intimPasswordInput.value.trim());
         formData.append('assessment_order', scrutinyFiles.ao);
         if (scrutinyFiles.cita) formData.append('cita_order', scrutinyFiles.cita);
+        if (scrutinyFiles.citaComp) formData.append('cita_comp_sheet', scrutinyFiles.citaComp);
 
         showScrutinySection('progress');
         updateScrutinyProgress('uploading', 'Uploading documents…', 0);
@@ -360,10 +362,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function resetScrutiny() {
         if (scrutinyPollInterval) { clearInterval(scrutinyPollInterval); scrutinyPollInterval = null; }
-        scrutinyFiles = { comp: null, intim: null, ao: null, cita: null };
+        scrutinyFiles = { comp: null, intim: null, ao: null, cita: null, citaComp: null };
         scrutinyJobId = null;
         intimPasswordInput.value = '';
-        ['comp', 'intim', 'ao', 'cita'].forEach(prefix => {
+        ['comp', 'intim', 'ao', 'cita', 'citaComp'].forEach(prefix => {
             document.getElementById(prefix + 'FileInput').value = '';
             document.getElementById(prefix + 'Dropzone').classList.remove('hidden');
             document.getElementById(prefix + 'FileDisplay').classList.add('hidden');
