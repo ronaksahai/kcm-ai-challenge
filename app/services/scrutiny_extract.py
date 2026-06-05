@@ -8,6 +8,7 @@ import tempfile
 import json
 import logging
 import PyPDF2
+import pymupdf  # PyMuPDF
 from google import genai
 from google.genai import types
 
@@ -91,35 +92,47 @@ def _ask_gemini(prompt: str, pdf_path: str = None) -> dict:
 
 def _extract_pdf_text(pdf_path: str, password: str = None) -> str:
     """Extract all text from a PDF, optionally decrypting."""
-    reader = PyPDF2.PdfReader(pdf_path)
-    if reader.is_encrypted:
-        if not password:
-            raise ValueError("PDF is encrypted. Please provide the password.")
-        reader.decrypt(password)
-    pages = []
-    for i, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
-        pages.append(f"--- Page {i+1} ---\n{text}")
-    return "\n\n".join(pages)
+    try:
+        doc = pymupdf.open(pdf_path)
+        if doc.needs_pass:
+            if not password:
+                raise ValueError("PDF is encrypted. Please provide the password.")
+            if not doc.authenticate(password):
+                raise ValueError("Incorrect password for PDF.")
+        pages = []
+        for i, page in enumerate(doc):
+            text = page.get_text() or ""
+            pages.append(f"--- Page {i+1} ---\n{text}")
+        doc.close()
+        return "\n\n".join(pages)
+    except Exception as e:
+        logger.error(f"Failed to extract PDF text with PyMuPDF: {e}")
+        return ""
 
 
 def _extract_english_pages(pdf_path: str, password: str) -> str:
     """Extract only English pages from Intimation PDF (skip Hindi)."""
-    reader = PyPDF2.PdfReader(pdf_path)
-    if reader.is_encrypted:
-        if not password:
-            raise ValueError("PDF is encrypted. Please provide the password.")
-        reader.decrypt(password)
-    pages = []
-    for i, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
-        # English pages contain structured headers like "Sl.No.", "Particulars"
-        # and the text "Intimation u/s 143(1)" in English
-        if "Particulars" in text or "Reporting Heads" in text or "RETURN DETAILS" in text:
-            pages.append(f"--- Page {i+1} ---\n{text}")
-        elif "Mismatch between Tax Credits" in text or "Notes:" in text:
-            pages.append(f"--- Page {i+1} ---\n{text}")
-    return "\n\n".join(pages)
+    try:
+        doc = pymupdf.open(pdf_path)
+        if doc.needs_pass:
+            if not password:
+                raise ValueError("PDF is encrypted. Please provide the password.")
+            if not doc.authenticate(password):
+                raise ValueError("Incorrect password for PDF.")
+        pages = []
+        for i, page in enumerate(doc):
+            text = page.get_text() or ""
+            # English pages contain structured headers like "Sl.No.", "Particulars"
+            # and the text "Intimation u/s 143(1)" in English
+            if "Particulars" in text or "Reporting Heads" in text or "RETURN DETAILS" in text:
+                pages.append(f"--- Page {i+1} ---\n{text}")
+            elif "Mismatch between Tax Credits" in text or "Notes:" in text:
+                pages.append(f"--- Page {i+1} ---\n{text}")
+        doc.close()
+        return "\n\n".join(pages)
+    except Exception as e:
+        logger.error(f"Failed to extract English pages with PyMuPDF: {e}")
+        return ""
 
 
 # ── Computation Sheet Extraction ─────────────────────────────
@@ -184,6 +197,7 @@ Important:
 - "amount_payable_refund": negative means refund, positive means payable
 - "demand_amount": the final demand/refund from point 58 or 62
 - Parse Indian number format: 2,36,77,47,375 = 2367747375
+- EXTREMELY IMPORTANT: Pay close attention to the column headers. Do NOT copy values from the "As Computed u/s 143(1)" column into the "As provided by Taxpayer" (ROI) column. They are often DIFFERENT (especially for TDS and Total Taxes Paid). Look carefully at the horizontal alignment. If the ROI column is blank for a row, use 0.
 
 PDF Text:
 """
@@ -321,9 +335,13 @@ Required JSON keys:
   }
 }
 
+CRITICAL COLUMN MAPPING RULES:
+- The Intimation has exactly TWO data columns per line item.
+- The FIRST/LEFT column is "As provided by Taxpayer" (ROI). Map it to the "roi" object.
+- The SECOND/RIGHT column is "As Computed u/s 143(1)". Map it to the "computed" object.
+- DO NOT swap them. The LEFT column value goes into "roi" and the RIGHT column value goes into "computed".
+
 Important:
-- "roi" = "As provided by Taxpayer" column
-- "computed" = "As Computed u/s 143(1)" column
 - Parse Indian numbers: 2,32,53,22,706 = 2325322706
 - The intimation has detailed line items (sl.no 01 through ~50)
 - "income_normal_rates" = the INCOME CHARGEABLE TO TAX AT NORMAL RATES (sl.no ~15). THIS WILL BE EXACTLY 0 if the document shows 0. Do not confuse it with "TAX AT NORMAL RATES".
@@ -334,7 +352,7 @@ Important:
 - "interest_234b" = INTEREST U/S 234B (sl.no ~35).
 - "tds" = TDS / Tax Deducted at Source (sl.no ~42).
 - "tcs" = TCS / Tax Collected at Source (sl.no ~43).
-- "advance_tax" = ADVANCE TAX (sl.no ~44).
+- "advance_tax" = ADVANCE TAX (sl.no ~44). DO NOT confuse this with REFUND AMOUNT. If the line item says "Refund" or "Amount Refundable/Payable", that is NOT advance tax.
 - "self_assessment_tax" = SELF ASSESSMENT TAX (sl.no ~44).
 - "total_taxes_paid" = TOTAL TAXES PAID (sl.no ~45). Extract the EXACT number written on the document. DO NOT try to recalculate it yourself.
 - "interest_244a" = INTEREST U/S 244A ON REFUND (sl.no ~49).
@@ -403,27 +421,29 @@ def extract_intimation_order(pdf_path: str, password: str, progress_cb=None) -> 
     def _fallback_extract_tds(full_pdf_text):
         lines = [line.strip() for line in full_pdf_text.split('\n') if line.strip()]
         for i, line in enumerate(lines):
-            if "GROSS TAX LIABILITY" in line.upper() and "28=" in line.replace(" ", ""):
+            if "GROSS TAX LIABILITY" in line.upper():
                 nums = []
-                for j in range(i-1, max(0, i-15), -1):
+                for j in range(i-1, max(0, i-20), -1):
                     val = lines[j].replace(',', '')
                     if val.isdigit() or (val.startswith('-') and val[1:].isdigit()):
                         nums.append(int(val))
-                if len(nums) >= 5 and nums[0] == 28:
-                    return nums[4], nums[3] # roi_tds, c1_tds
-                elif len(nums) >= 4:
-                    return nums[3], nums[2]
+                
+                if len(nums) >= 5:
+                    if nums[0] in (26, 27, 28, 29):
+                        return nums[4], nums[3]
+                    elif any(x in line.replace(" ", "") for x in ("28=", "26=", "29=")):
+                        return nums[3], nums[2]
         return None, None
 
     tds_roi_override, tds_c1_override = _fallback_extract_tds(full_text)
     if tds_roi_override is not None:
-        if data.get("roi") and isinstance(data["roi"], dict) and data["roi"].get("tds") == 0:
+        if data.get("roi") and isinstance(data["roi"], dict):
+            logger.info(f"Regex override for ROI TDS: {data['roi'].get('tds')} -> {tds_roi_override}")
             data["roi"]["tds"] = tds_roi_override
-            logger.info(f"Regex override for ROI TDS: {tds_roi_override}")
     if tds_c1_override is not None:
-        if data.get("computed") and isinstance(data["computed"], dict) and data["computed"].get("tds") == 0:
+        if data.get("computed") and isinstance(data["computed"], dict):
+            logger.info(f"Regex override for 143(1) TDS: {data['computed'].get('tds')} -> {tds_c1_override}")
             data["computed"]["tds"] = tds_c1_override
-            logger.info(f"Regex override for 143(1) TDS: {tds_c1_override}")
 
     # Post-processing: auto-correct TDS if total_taxes_paid doesn't match components
     for section_key in ("roi", "computed"):
@@ -451,12 +471,45 @@ def extract_intimation_order(pdf_path: str, password: str, progress_cb=None) -> 
                 section["tds"] = gap
                 logger.info(f"Auto-corrected {section_key} TDS: {gap} (total_taxes_paid={ttp}, advance_tax={adv})")
 
+        # Sanity check: advance_tax cannot exceed total_taxes_paid - tds - tcs - sat
+        if ttp > 0 and adv > 0:
+            max_adv = ttp - tds - tcs - sat
+            if adv > max_adv:
+                logger.info(f"advance_tax {adv} exceeds max possible {max_adv} for {section_key} — zeroing")
+                section["advance_tax"] = 0
+                adv = 0
+
         # Mathematical fallback for Surcharge and Cess based on Gross Tax Liability
         gtl = section.get("gross_tax_liability", 0) or 0
-        tax_base = max(section.get("tax_normal_rates", 0) or 0, section.get("tax_115jb", 0) or 0)
+        tax_base = max(
+            section.get("tax_normal_rates", 0) or section.get("tax_on_total_income", 0) or 0,
+            section.get("tax_115jb", 0) or 0
+        )
         sur = section.get("surcharge_total", 0) or 0
         ces = section.get("cess", 0) or 0
         
+        # Detect surcharge/cess swap: Gemini frequently swaps these because
+        # the PDF layout has numbers far from their labels.
+        # Surcharge is computed on tax_base, so surcharge_rate = sur / tax_base.
+        # Cess is computed on (tax_base + surcharge), so cess_rate = ces / (tax_base + sur).
+        # In Indian IT: surcharge is typically 2-15% of tax, cess is 2-4% of (tax+surcharge).
+        # If cess > surcharge AND swapping them produces valid rates, they're swapped.
+        if sur > 0 and ces > 0 and tax_base > 0 and ces > sur:
+            # Check if swapping produces valid rates
+            swapped_sur = ces  # would-be surcharge
+            swapped_ces = sur  # would-be cess
+            swapped_sur_rate = swapped_sur / tax_base
+            swapped_ces_rate = swapped_ces / (tax_base + swapped_sur)
+            # Valid surcharge: 2-15%, valid cess: 2-4%
+            if 0.01 <= swapped_sur_rate <= 0.20 and 0.015 <= swapped_ces_rate <= 0.05:
+                logger.info(f"Auto-correcting swapped surcharge/cess for {section_key}: "
+                           f"surcharge {sur}->{swapped_sur}, cess {ces}->{swapped_ces} "
+                           f"(sur_rate={swapped_sur_rate:.2%}, cess_rate={swapped_ces_rate:.2%})")
+                section["surcharge_total"] = swapped_sur
+                section["cess"] = swapped_ces
+                sur = swapped_sur
+                ces = swapped_ces
+
         if gtl > 0 and tax_base > 0:
             calc_gtl = tax_base + sur + ces
             if calc_gtl != gtl:
@@ -469,9 +522,43 @@ def extract_intimation_order(pdf_path: str, password: str, progress_cb=None) -> 
                         section["cess"] = diff
                         logger.info(f"Auto-corrected {section_key} Cess: {diff} (from Gross Tax Liability)")
                     elif sur == 0 and ces == 0:
-                        # If both are 0, we can't reliably split it without knowing rates, but we'll leave it 0
-                        # and let the Excel rate fallback handle it if needed.
                         pass
+
+    # Sanity check: PGBP swap (Gemini sometimes swaps ROI and Computed for PGBP)
+    roi_dict = data.get("roi") or {}
+    c1_dict = data.get("computed") or {}
+    roi_pgbp = roi_dict.get("income_business_profession", 0)
+    c1_pgbp = c1_dict.get("income_business_profession", 0)
+    if roi_pgbp and c1_pgbp and roi_pgbp != c1_pgbp:
+        import re
+        clean_text = re.sub(r',', '', full_text)
+        idx_roi = clean_text.find(str(roi_pgbp))
+        idx_c1 = clean_text.find(str(c1_pgbp))
+        if idx_roi != -1 and idx_c1 != -1 and idx_c1 < idx_roi:
+            # PyMuPDF extracts left-to-right, so ROI must appear before C1.
+            # If C1 appears before ROI in text, Gemini swapped them.
+            logger.info(f"Auto-correcting swapped PGBP: ROI={c1_pgbp}, C1={roi_pgbp}")
+            roi_dict["income_business_profession"] = c1_pgbp
+            c1_dict["income_business_profession"] = roi_pgbp
+
+    # Sanity check: deduction field hallucinations
+    # Gemini sometimes puts tax_normal_rates into deduction fields by mistake.
+    # Deductions can never equal the tax amount, so zero any that match.
+    ded_keys = ["deduction_part_b", "deduction_part_c", "deduction_10aa"]
+    for section_key in ("roi", "computed"):
+        section = data.get(section_key)
+        if not section or not isinstance(section, dict):
+            continue
+        tax_nr = section.get("tax_normal_rates", 0) or 0
+        tax_oti = section.get("tax_on_total_income", 0) or 0
+        if not tax_nr and not tax_oti:
+            continue
+        for dk in ded_keys:
+            dv = section.get(dk, 0) or 0
+            if dv > 0 and (dv == tax_nr or dv == tax_oti):
+                logger.info(f"Zeroing hallucinated {dk}={dv} for {section_key} "
+                           f"(matches tax_normal_rates={tax_nr})")
+                section[dk] = 0
 
     return data
 

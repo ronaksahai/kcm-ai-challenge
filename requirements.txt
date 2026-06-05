@@ -7,3 +7,4 @@ python-dotenv>=1.0
 openpyxl>=3.1
 google-genai>=1.0
 python-docx>=1.0
+PyMuPDF>=1.20

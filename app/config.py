@@ -22,7 +22,7 @@ SARVAM_TRANSLATE_URL = f"{SARVAM_BASE_URL}/translate"
 
 # ── Google Gemini API (Order Scrutiny) ───────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
+GEMINI_MODEL = "gemini-2.5-pro"
 
 # ── Sarvam Translate Settings ────────────────────────────────
 TRANSLATE_MODEL = "mayura:v1"
