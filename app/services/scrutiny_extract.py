@@ -135,6 +135,51 @@ def _extract_english_pages(pdf_path: str, password: str) -> str:
         return ""
 
 
+def _fix_mangled_intimation_fields(section: dict, section_name: str):
+    """Fallback: Auto-correct fields commonly swapped due to scrambled Intimation PDFs."""
+    if not section or not isinstance(section, dict):
+        return
+
+    # 1. tax_115jb (MAT) swapped with loss_carried_forward
+    lcf = section.get("loss_carried_forward", 0) or 0
+    if lcf > 0:
+        t115jb = section.get("tax_115jb", 0) or 0
+        income_115jb = section.get("income_115jb", 0) or 0
+        if income_115jb > 0:
+            # Check if lcf exactly matches the MAT rate (15% to 23% of income_115jb)
+            mat_rate = lcf / income_115jb
+            if 0.15 <= mat_rate <= 0.23:
+                # lcf is actually the Total MAT tax. We zero out the hallucination.
+                section["loss_carried_forward"] = 0
+                logger.info(f"Zeroed out hallucinated loss_carried_forward (matches MAT rate) in {section_name}")
+
+    # 2. Surcharge swapped with interest_234b or total_interest_fee
+    i234b = section.get("interest_234b", 0) or 0
+    tif = section.get("total_interest_fee", 0) or 0
+    # The swapped surcharge could be in i234b or tif
+    swapped_sur_candidate = max(i234b, tif)
+    sur = section.get("surcharge_total", 0) or 0
+    
+    if swapped_sur_candidate > 0:
+        tax_base = max(section.get("tax_on_total_income", 0) or 0, section.get("tax_115jb", 0) or 0)
+        if tax_base > 0:
+            rate_candidate = swapped_sur_candidate / tax_base
+            # If candidate is exactly 7% or 12% of the tax base (standard corporate surcharge rates)
+            if 0.065 < rate_candidate < 0.075 or 0.115 < rate_candidate < 0.125:
+                if sur <= swapped_sur_candidate:
+                    # Surcharge is probably Cess or 0, OR it was correctly extracted but duplicated
+                    if sur > 0 and sur < swapped_sur_candidate:
+                        rate_sur = sur / (tax_base + swapped_sur_candidate)
+                        if 0.025 < rate_sur < 0.045:
+                            section["cess"] = sur
+                    section["surcharge_total"] = swapped_sur_candidate
+                    if swapped_sur_candidate == i234b:
+                        section["interest_234b"] = 0
+                    if swapped_sur_candidate == tif:
+                        section["total_interest_fee"] = 0
+                    logger.info(f"Fixed swapped/duplicated Surcharge -> 234B/Total_Interest in {section_name}")
+
+
 def _fix_tax_components(section: dict, section_name: str, reference_roi: dict = None):
     """Fallback: Auto-correct missing tax components if total_taxes_paid is known."""
     if not section or not isinstance(section, dict):
@@ -208,13 +253,6 @@ def _fix_surcharge_and_cess(section: dict, section_name: str, ay_str: str = ""):
     
     if agg > 0:
         true_gtl = agg - int_fee
-    elif ttp > 0:
-        # Note: pay could be a refund, so we check total_taxes_paid + amount_payable_refund
-        # Usually, if it's a refund, 'pay' might be stored as positive. In Indian tax PDFs, 
-        # "Refund Adjusted" and "Payable" are separate. 
-        # If it's a refund, payable is 0. If payable > 0, we add it. 
-        # Actually, let's just trust aggregate_liability if we have it, or fall back to GTL.
-        true_gtl = ttp + pay - int_fee
         
     gtl = section.get("gross_tax_liability", 0) or 0
     if true_gtl > 0 and gtl > 0 and abs(gtl - true_gtl) > 100:
@@ -347,6 +385,7 @@ Important:
 - "demand_amount": the final demand/refund from point 58 or 62
 - Parse Indian number format: 2,36,77,47,375 = 2367747375
 - "tax_special_rates": The TOTAL tax on income chargeable at special rates. If the document explicitly shows "Tax at special rates" or "Tax on special income", use that value. If NOT explicitly mentioned, calculate as: tax_on_total_income - tax_normal_rates. If tax_on_total_income equals tax_normal_rates, then tax_special_rates = 0.
+- "income_special_rates": Only use values explicitly labeled as income chargeable to tax at special rates. DO NOT mistakenly extract the 'tax payable u/s 115JB' into this field.
 - EXTREMELY IMPORTANT: Pay close attention to the column headers. Do NOT copy values from the "As Computed u/s 143(1)" column into the "As provided by Taxpayer" (ROI) column. They are often DIFFERENT (especially for TDS and Total Taxes Paid). Look carefully at the horizontal alignment. If the ROI column is blank for a row, use 0.
 
 PDF Text:
@@ -531,8 +570,10 @@ CRITICAL COLUMN MAPPING RULES:
 Important:
 - Parse Indian numbers: 2,32,53,22,706 = 2325322706
 - The intimation has detailed line items (sl.no 01 through ~50)
-- "income_normal_rates" = the INCOME CHARGEABLE TO TAX AT NORMAL RATES (sl.no ~15). THIS WILL BE EXACTLY 0 if the document shows 0. Do not confuse it with "TAX AT NORMAL RATES".
-- "income_special_rates" = the INCOME CHARGEABLE TO TAX AT SPECIAL RATES (sl.no ~14).
+- "income_normal_rates" = the INCOME CHARGEABLE TO TAX AT NORMAL RATES (sl.no ~15). THIS WILL BE EXACTLY 0 if the document shows 0. Do not confuse it with "TAX AT NORMAL RATES". Do not confuse it with Deemed Total Income u/s 115JB.
+- "income_special_rates" = the INCOME CHARGEABLE TO TAX AT SPECIAL RATES (sl.no ~14). DO NOT mistakenly extract 'TAX PAYABLE ON DEEMED TOTAL INCOME UNDER SECTION 115JB' into this field, they are completely different.
+- "income_115jb" = DEEMED TOTAL INCOME U/S 115JB (sl.no ~19). Do not confuse this with income_normal_rates.
+- "tax_115jb" = TAX PAYABLE ON DEEMED TOTAL INCOME UNDER SECTION 115JB (sl.no ~20). This should be the base tax amount before surcharge and cess.
 - "tax_normal_rates" = TAX AT NORMAL RATES (sl.no ~16 or ~24).
 - "tax_special_rates" = TAX AT SPECIAL RATES (sl.no ~25). This is the tax amount on income chargeable at special rates. Extract it directly.
 - "surcharge_total" = SURCHARGE (sl.no ~26).
@@ -629,12 +670,41 @@ def extract_intimation_order(pdf_path: str, password: str, progress_cb=None) -> 
     # Post-processing: auto-correct taxes paid components and Surcharge/Cess
     roi_ref = data.get("roi", {})
     for section_key in ("roi", "computed"):
+        _fix_mangled_intimation_fields(data.get(section_key), section_key)
         _fix_tax_components(data.get(section_key), section_key, reference_roi=roi_ref if section_key == "computed" else None)
         _fix_surcharge_and_cess(data.get(section_key), section_key, data.get("assessment_year", ""))
 
     # Sanity check: PGBP swap (Gemini sometimes swaps ROI and Computed for PGBP)
     roi_dict = data.get("roi") or {}
     c1_dict = data.get("computed") or {}
+
+    # Sanity check: 244A interest column shift
+    # If the Intimation says N/A for ROI, the AI often shifts the 143(1) value into the ROI column.
+    roi_244a = roi_dict.get("interest_244a", 0) or 0
+    c1_244a = c1_dict.get("interest_244a", 0) or 0
+    if roi_244a > 0 and c1_244a == 0:
+        c1_dict["interest_244a"] = roi_244a
+        roi_dict["interest_244a"] = 0
+        logger.info(f"Fixed 244A column shift: Moved {roi_244a} from ROI to Computed")
+
+    # Mathematical fallback for missing 244A interest
+    if c1_dict.get("interest_244a", 0) == 0:
+        net_ref = abs(c1_dict.get("net_refundable", 0) or c1_dict.get("demand_amount", 0) or 0)
+        base_pay = abs(c1_dict.get("amount_payable_refund", 0) or 0)
+        if base_pay == 0:
+            c1_ttp = c1_dict.get("total_taxes_paid", 0) or 0
+            c1_agg = c1_dict.get("aggregate_liability", 0) or 0
+            base_pay = abs(c1_ttp - c1_agg)
+        
+        if net_ref > base_pay and base_pay > 0:
+            # 244A could be the difference
+            diff = net_ref - base_pay
+            # Ensure it is a reasonable amount (e.g., > 100 to avoid rounding diffs)
+            if diff > 100:
+                c1_dict["interest_244a"] = diff
+                logger.info(f"Mathematically recovered 244A interest for Computed: {c1_dict['interest_244a']}")
+
+    # Sanity check: PGBP swap (Gemini sometimes swaps ROI and Computed for PGBP)
     roi_pgbp = roi_dict.get("income_business_profession", 0)
     c1_pgbp = c1_dict.get("income_business_profession", 0)
     if roi_pgbp and c1_pgbp and roi_pgbp != c1_pgbp:

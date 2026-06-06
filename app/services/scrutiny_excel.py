@@ -858,7 +858,7 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     int244a_c3_raw = _val(c3, "interest_244a")
     int244a_c3 = -abs(int244a_c3_raw) if int244a_c3_raw else 0
 
-    data_row(cur_row, "Add: Interest u/s 244A (As per separate sheet attached)",
+    data_row(cur_row, "Add: Interest u/s 244A",
              roi_val=int244a_roi,
              c1_val=int244a_c1,
              c3_val=int244a_c3,
