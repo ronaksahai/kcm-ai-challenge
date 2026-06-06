@@ -135,9 +135,156 @@ def _extract_english_pages(pdf_path: str, password: str) -> str:
         return ""
 
 
+def _fix_tax_components(section: dict, section_name: str, reference_roi: dict = None):
+    """Fallback: Auto-correct missing tax components if total_taxes_paid is known."""
+    if not section or not isinstance(section, dict):
+        return
+        
+    ttp = section.get("total_taxes_paid", 0) or 0
+    tds = section.get("tds", 0) or 0
+    tcs = section.get("tcs", 0) or 0
+    adv = section.get("advance_tax", 0) or 0
+    sat = section.get("self_assessment_tax", 0) or 0
+    reg = section.get("regular_tax", 0) or 0
+
+    parts_sum = tds + tcs + adv + sat + reg
+    if ttp > 0 and parts_sum != ttp:
+        gap = ttp - parts_sum
+        if gap > 0:
+            # Check if the gap perfectly matches a known ROI value (for C1/C3 fixing)
+            if reference_roi:
+                if gap == (reference_roi.get("self_assessment_tax", 0) or 0) and sat == 0:
+                    section["self_assessment_tax"] = gap
+                    logger.info(f"Auto-corrected {section_name} SAT from ROI: {gap}")
+                    return
+                if gap == (reference_roi.get("advance_tax", 0) or 0) and adv == 0:
+                    section["advance_tax"] = gap
+                    logger.info(f"Auto-corrected {section_name} Advance Tax from ROI: {gap}")
+                    return
+                    
+                # If the AI hallucinates a tiny TDS (like 28) but the gap matches the ROI's massive TDS
+                roi_tds = reference_roi.get("tds", 0) or 0
+                if roi_tds > 0 and abs(gap + tds - roi_tds) < 100:
+                    section["tds"] = gap + tds
+                    logger.info(f"Auto-corrected {section_name} TDS from ROI (overriding hallucinated {tds}): {section['tds']}")
+                    return
+
+            # If no reference, or no match, guess based on which field is empty
+            if sat == 0 and adv > 0 and tds > 0:
+                section["self_assessment_tax"] = gap
+                logger.info(f"Auto-corrected {section_name} SAT (inferred): {gap}")
+            elif tds == 0 and adv > 0:
+                section["tds"] = gap
+                logger.info(f"Auto-corrected {section_name} TDS (inferred): {gap}")
+
+        elif gap < 0:
+            # AI hallucinated extra taxes. If Refund Amount was stuffed into SAT, fix it.
+            gap_without_sat = ttp - (tcs + adv + reg)
+            if gap_without_sat > 0 and tds == 0 and sat > gap_without_sat:
+                section["tds"] = gap_without_sat
+                section["self_assessment_tax"] = 0
+                logger.info(f"Swapped hallucinated SAT to TDS for {section_name}: {gap_without_sat}")
+
+    # Sanity check: advance_tax cannot exceed total
+    adv = section.get("advance_tax", 0) or 0
+    if ttp > 0 and adv > ttp:
+        section["advance_tax"] = 0
+        logger.info(f"advance_tax {adv} exceeds total {ttp} for {section_name} — zeroing")
+
+def _fix_surcharge_and_cess(section: dict, section_name: str, ay_str: str = ""):
+    """Fallback: Auto-correct Surcharge and Cess hallucinations based on Gross Tax Liability."""
+    if not section or not isinstance(section, dict):
+        return
+        
+    # Verify if the extracted GTL is consistent with the bottom line.
+    # If the LLM hallucinated a fake 12% surcharge, it might have also
+    # hallucinated a fake GTL to make the math look perfect.
+    # But it rarely hallucinates the bottom-line numbers.
+    true_gtl = 0
+    agg = section.get("aggregate_liability", 0) or 0
+    int_fee = section.get("total_interest_fee", 0) or 0
+    ttp = section.get("total_taxes_paid", 0) or 0
+    pay = section.get("amount_payable_refund", 0) or 0
+    
+    if agg > 0:
+        true_gtl = agg - int_fee
+    elif ttp > 0:
+        # Note: pay could be a refund, so we check total_taxes_paid + amount_payable_refund
+        # Usually, if it's a refund, 'pay' might be stored as positive. In Indian tax PDFs, 
+        # "Refund Adjusted" and "Payable" are separate. 
+        # If it's a refund, payable is 0. If payable > 0, we add it. 
+        # Actually, let's just trust aggregate_liability if we have it, or fall back to GTL.
+        true_gtl = ttp + pay - int_fee
+        
+    gtl = section.get("gross_tax_liability", 0) or 0
+    if true_gtl > 0 and gtl > 0 and abs(gtl - true_gtl) > 100:
+        logger.info(f"{section_name}: Detected hallucinated GTL ({gtl}). Reverting to true GTL ({true_gtl}).")
+        gtl = true_gtl
+    elif gtl == 0 and true_gtl > 0:
+        gtl = true_gtl
+    
+    if gtl == 0:
+        gtl = section.get("net_tax_liability", 0) or 0
+
+    # tax_on_total_income is the correct base for Surcharge in India, NOT tax_normal_rates.
+    # Sometimes tax_normal_rates excludes special rate tax. 
+    tax_base = max(
+        section.get("tax_on_total_income", 0) or section.get("tax_normal_rates", 0) or 0,
+        section.get("tax_115jb", 0) or 0
+    )
+    sur = section.get("surcharge_total", 0) or 0
+    ces = section.get("cess", 0) or 0
+    
+    if gtl <= 0 or tax_base <= 0:
+        return
+
+    # Detect surcharge/cess swap
+    if sur > 0 and ces > 0 and tax_base > 0 and ces > sur:
+        swapped_sur = ces
+        swapped_ces = sur
+        swapped_sur_rate = swapped_sur / tax_base
+        swapped_ces_rate = swapped_ces / (tax_base + swapped_sur)
+        if 0.01 <= swapped_sur_rate <= 0.20 and 0.015 <= swapped_ces_rate <= 0.05:
+            logger.info(f"Auto-correcting swapped surcharge/cess for {section_name}")
+            section["surcharge_total"] = swapped_sur
+            section["cess"] = swapped_ces
+            sur, ces = swapped_sur, swapped_ces
+
+    # Detect LLM hallucination (e.g. outputting 12% surcharge when it should be 7%)
+    # by verifying if the sum equals Gross Tax Liability.
+    calc_gtl = tax_base + sur + ces
+    if abs(calc_gtl - gtl) > 100:  # Allow small rounding differences
+        logger.info(f"{section_name}: Surcharge/Cess math broken (calc={calc_gtl}, actual={gtl}). Attempting math rescue.")
+        
+        # Deduce true values using Cess rate (4% for AY >= 2019-20, 3% for older)
+        cess_rate = 0.04
+        if ay_str:
+            try:
+                ay_start = int(ay_str.split("-")[0])
+                if ay_start <= 2018:
+                    cess_rate = 0.03
+            except:
+                pass
+                
+        # gtl = (tax + sur) * (1 + cess_rate)
+        # tax + sur = gtl / (1 + cess_rate)
+        tax_plus_sur = gtl / (1 + cess_rate)
+        true_sur = round(tax_plus_sur - tax_base)
+        true_ces = round(gtl - tax_plus_sur)
+        
+        # Only apply if it produces a positive surcharge (or near zero)
+        if true_sur >= -10 and true_ces >= 0:
+            true_sur = max(0, true_sur)
+            section["surcharge_total"] = true_sur
+            section["cess"] = true_ces
+            logger.info(f"Rescued {section_name} Surcharge: {true_sur}, Cess: {true_ces} (via Gross Tax Liability)")
+
 # ── Computation Sheet Extraction ─────────────────────────────
 
 COMP_SHEET_PROMPT = """You are an Indian Income Tax expert. Extract data from this Computation Sheet PDF text.
+CRITICAL INSTRUCTION: You must ONLY extract numbers EXACTLY as they appear printed in the text document. 
+DO NOT perform any mathematical calculations to fill in missing gaps. 
+DO NOT use internal knowledge to infer missing rates (like 12% surcharge). If a number is not literally present in the text, output 0.
 Return a JSON object with these exact keys. Use plain numbers (no commas). Use 0 for missing/blank values.
 
 Required JSON keys:
@@ -164,8 +311,10 @@ Required JSON keys:
   "income_normal_rates": number,
   "tax_normal_rates": number,
   "tax_115bbe": number,
-  "tax_special_other": number,
+  "tax_special_rates": number,
   "tax_on_total_income": number,
+  "credit_115jaa": number,
+  "tax_payable_after_115jaa": number,
   "income_115jb": number,
   "tax_115jb": number,
   "surcharge_total": number,
@@ -197,6 +346,7 @@ Important:
 - "amount_payable_refund": negative means refund, positive means payable
 - "demand_amount": the final demand/refund from point 58 or 62
 - Parse Indian number format: 2,36,77,47,375 = 2367747375
+- "tax_special_rates": The TOTAL tax on income chargeable at special rates. If the document explicitly shows "Tax at special rates" or "Tax on special income", use that value. If NOT explicitly mentioned, calculate as: tax_on_total_income - tax_normal_rates. If tax_on_total_income equals tax_normal_rates, then tax_special_rates = 0.
 - EXTREMELY IMPORTANT: Pay close attention to the column headers. Do NOT copy values from the "As Computed u/s 143(1)" column into the "As provided by Taxpayer" (ROI) column. They are often DIFFERENT (especially for TDS and Total Taxes Paid). Look carefully at the horizontal alignment. If the ROI column is blank for a row, use 0.
 
 PDF Text:
@@ -234,15 +384,46 @@ def extract_computation_sheet(pdf_path: str, progress_cb=None) -> dict:
     if not isinstance(data, dict):
         data = {}
     logger.info(f"Computation Sheet parsed: {data.get('entity_name')}, AY {data.get('assessment_year')}")
+
+    # Backward compatibility: rename old key if present
+    if "tax_special_other" in data and "tax_special_rates" not in data:
+        data["tax_special_rates"] = data.pop("tax_special_other")
+
+    # Fallbacks for missing explicitly stated values
+    if data:
+        tax_total = data.get("tax_on_total_income", 0) or 0
+        tax_normal = data.get("tax_normal_rates", 0) or 0
+        tax_special = data.get("tax_special_rates", 0) or 0
+        
+        if tax_total > 0 and tax_normal > 0 and tax_total > tax_normal:
+            data["tax_special_rates"] = tax_total - tax_normal
+            logger.info(f"Computed tax_special_rates fallback: {data['tax_special_rates']}")
+
+        credit_115 = data.get("credit_115jaa", 0) or 0
+        if credit_115 == 0:
+            tax_after = data.get("tax_payable_after_115jaa", 0) or 0
+            gross_tax = data.get("gross_tax_liability", 0) or 0
+            if tax_after > 0 and gross_tax > 0 and gross_tax > tax_after:
+                data["credit_115jaa"] = gross_tax - tax_after
+                logger.info(f"Computed credit_115jaa fallback: {data['credit_115jaa']}")
+
+    _fix_tax_components(data, "Computation Sheet")
+    _fix_surcharge_and_cess(data, "Computation Sheet", data.get("assessment_year", ""))
+
     return data
 
 
 # ── Intimation Order Extraction ──────────────────────────────
 
-INTIMATION_PROMPT = """You are an Indian Income Tax expert. Extract data from this Intimation u/s 143(1) OR Income Tax Return (ITR) PDF text.
-If the document is an Intimation Order, it has two columns: "As provided by Taxpayer" (ROI) and "As Computed u/s 143(1)".
-If the document is an ITR, it only has the return of income details. In this case, set "is_itr" to true, populate the "roi" object, and leave "computed" as null or empty.
-Return a JSON object. Use plain numbers (no commas). Use 0 for missing/blank/N/A values.
+INTIMATION_PROMPT = """You are an Indian Income Tax expert. Extract data from this Intimation Order PDF text.
+The order usually has two columns: "As provided by taxpayer in Return of Income" (ROI) and "As computed under section 143(1)" (Computed).
+Extract both columns into separate objects.
+
+CRITICAL INSTRUCTION: You must ONLY extract numbers EXACTLY as they appear printed in the text document. 
+DO NOT perform any mathematical calculations to fill in missing gaps. 
+DO NOT use internal knowledge to infer missing rates (like 12% surcharge). If a number is not literally present in the text, output 0.
+
+Return a JSON object. Use plain numbers (no commas). Use 0 for missing/blank values.
 
 Required JSON keys:
 {
@@ -269,7 +450,10 @@ Required JSON keys:
     "income_normal_rates": number,
     "income_special_rates": number,
     "tax_normal_rates": number,
+    "tax_special_rates": number,
     "tax_on_total_income": number,
+    "credit_115jaa": number,
+    "tax_payable_after_115jaa": number,
     "income_115jb": number,
     "tax_115jb": number,
     "surcharge_total": number,
@@ -289,7 +473,7 @@ Required JSON keys:
     "self_assessment_tax": number,
     "regular_tax": number,
     "total_taxes_paid": number,
-    "refund_amount": number,
+    "refund_already_issued": number,
     "interest_244a": number
   },
   "computed": {
@@ -309,7 +493,10 @@ Required JSON keys:
     "income_normal_rates": number,
     "income_special_rates": number,
     "tax_normal_rates": number,
+    "tax_special_rates": number,
     "tax_on_total_income": number,
+    "credit_115jaa": number,
+    "tax_payable_after_115jaa": number,
     "income_115jb": number,
     "tax_115jb": number,
     "surcharge_total": number,
@@ -329,7 +516,7 @@ Required JSON keys:
     "self_assessment_tax": number,
     "regular_tax": number,
     "total_taxes_paid": number,
-    "refund_amount": number,
+    "refund_already_issued": number,
     "interest_244a": number,
     "net_refundable": number
   }
@@ -347,6 +534,7 @@ Important:
 - "income_normal_rates" = the INCOME CHARGEABLE TO TAX AT NORMAL RATES (sl.no ~15). THIS WILL BE EXACTLY 0 if the document shows 0. Do not confuse it with "TAX AT NORMAL RATES".
 - "income_special_rates" = the INCOME CHARGEABLE TO TAX AT SPECIAL RATES (sl.no ~14).
 - "tax_normal_rates" = TAX AT NORMAL RATES (sl.no ~16 or ~24).
+- "tax_special_rates" = TAX AT SPECIAL RATES (sl.no ~25). This is the tax amount on income chargeable at special rates. Extract it directly.
 - "surcharge_total" = SURCHARGE (sl.no ~26).
 - "cess" = EDUCATION CESS (sl.no ~27).
 - "interest_234b" = INTEREST U/S 234B (sl.no ~35).
@@ -415,114 +603,34 @@ def extract_intimation_order(pdf_path: str, password: str, progress_cb=None) -> 
         data = {}
     logger.info(f"Intimation parsed: {data.get('entity_name')}, AY {data.get('assessment_year')}")
 
-    # --- Robust Text Parsing Fallback for TDS ---
-    # Due to complex right-aligned columnar layouts in Intimations, Gemini often misses TDS.
-    # We parse the text explicitly by anchoring to the Gross Tax Liability label.
-    def _fallback_extract_tds(full_pdf_text):
-        lines = [line.strip() for line in full_pdf_text.split('\n') if line.strip()]
-        for i, line in enumerate(lines):
-            if "GROSS TAX LIABILITY" in line.upper():
-                nums = []
-                for j in range(i-1, max(0, i-20), -1):
-                    val = lines[j].replace(',', '')
-                    if val.isdigit() or (val.startswith('-') and val[1:].isdigit()):
-                        nums.append(int(val))
-                
-                if len(nums) >= 5:
-                    if nums[0] in (26, 27, 28, 29):
-                        return nums[4], nums[3]
-                    elif any(x in line.replace(" ", "") for x in ("28=", "26=", "29=")):
-                        return nums[3], nums[2]
-        return None, None
 
-    tds_roi_override, tds_c1_override = _fallback_extract_tds(full_text)
-    if tds_roi_override is not None:
-        if data.get("roi") and isinstance(data["roi"], dict):
-            logger.info(f"Regex override for ROI TDS: {data['roi'].get('tds')} -> {tds_roi_override}")
-            data["roi"]["tds"] = tds_roi_override
-    if tds_c1_override is not None:
-        if data.get("computed") and isinstance(data["computed"], dict):
-            logger.info(f"Regex override for 143(1) TDS: {data['computed'].get('tds')} -> {tds_c1_override}")
-            data["computed"]["tds"] = tds_c1_override
 
-    # Post-processing: auto-correct TDS if total_taxes_paid doesn't match components
+    # Post-processing: compute tax_special_rates and credit_115jaa fallback
     for section_key in ("roi", "computed"):
         section = data.get(section_key)
         if not section or not isinstance(section, dict):
             continue
-        ttp = section.get("total_taxes_paid", 0) or 0
-        tds = section.get("tds", 0) or 0
-        tcs = section.get("tcs", 0) or 0
-        adv = section.get("advance_tax", 0) or 0
-        sat = section.get("self_assessment_tax", 0) or 0
+            
+        tax_total = section.get("tax_on_total_income", 0) or 0
+        tax_normal = section.get("tax_normal_rates", 0) or 0
+        tax_special = section.get("tax_special_rates", 0) or 0
         
-        parts_sum = tds + tcs + adv + sat
-        if ttp > 0 and parts_sum != ttp:
-            # AI often misattributes the Refund Amount to Self Assessment Tax due to PDF layout.
-            # If removing SAT leaves a clean gap that fits a missing TDS, fix the hallucination.
-            gap_without_sat = ttp - (tcs + adv)
-            if gap_without_sat > 0 and tds == 0 and sat > gap_without_sat:
-                logger.info(f"Zeroing hallucinated SAT: {sat} for {section_key}")
-                sat = 0
-                section["self_assessment_tax"] = 0
+        if tax_total > 0 and tax_normal > 0 and tax_total > tax_normal:
+            section["tax_special_rates"] = tax_total - tax_normal
+            logger.info(f"Computed {section_key} tax_special_rates fallback: {section['tax_special_rates']}")
 
-            gap = ttp - (tcs + adv + sat)
-            if gap > 0 and tds == 0:
-                section["tds"] = gap
-                logger.info(f"Auto-corrected {section_key} TDS: {gap} (total_taxes_paid={ttp}, advance_tax={adv})")
+        credit_115 = section.get("credit_115jaa", 0) or 0
+        if credit_115 == 0:
+            tax_after = section.get("tax_payable_after_115jaa", 0) or 0
+            if tax_after > 0 and tax_total > 0 and tax_total > tax_after:
+                section["credit_115jaa"] = tax_total - tax_after
+                logger.info(f"Computed {section_key} credit_115jaa fallback: {section['credit_115jaa']}")
 
-        # Sanity check: advance_tax cannot exceed total_taxes_paid - tds - tcs - sat
-        if ttp > 0 and adv > 0:
-            max_adv = ttp - tds - tcs - sat
-            if adv > max_adv:
-                logger.info(f"advance_tax {adv} exceeds max possible {max_adv} for {section_key} — zeroing")
-                section["advance_tax"] = 0
-                adv = 0
-
-        # Mathematical fallback for Surcharge and Cess based on Gross Tax Liability
-        gtl = section.get("gross_tax_liability", 0) or 0
-        tax_base = max(
-            section.get("tax_normal_rates", 0) or section.get("tax_on_total_income", 0) or 0,
-            section.get("tax_115jb", 0) or 0
-        )
-        sur = section.get("surcharge_total", 0) or 0
-        ces = section.get("cess", 0) or 0
-        
-        # Detect surcharge/cess swap: Gemini frequently swaps these because
-        # the PDF layout has numbers far from their labels.
-        # Surcharge is computed on tax_base, so surcharge_rate = sur / tax_base.
-        # Cess is computed on (tax_base + surcharge), so cess_rate = ces / (tax_base + sur).
-        # In Indian IT: surcharge is typically 2-15% of tax, cess is 2-4% of (tax+surcharge).
-        # If cess > surcharge AND swapping them produces valid rates, they're swapped.
-        if sur > 0 and ces > 0 and tax_base > 0 and ces > sur:
-            # Check if swapping produces valid rates
-            swapped_sur = ces  # would-be surcharge
-            swapped_ces = sur  # would-be cess
-            swapped_sur_rate = swapped_sur / tax_base
-            swapped_ces_rate = swapped_ces / (tax_base + swapped_sur)
-            # Valid surcharge: 2-15%, valid cess: 2-4%
-            if 0.01 <= swapped_sur_rate <= 0.20 and 0.015 <= swapped_ces_rate <= 0.05:
-                logger.info(f"Auto-correcting swapped surcharge/cess for {section_key}: "
-                           f"surcharge {sur}->{swapped_sur}, cess {ces}->{swapped_ces} "
-                           f"(sur_rate={swapped_sur_rate:.2%}, cess_rate={swapped_ces_rate:.2%})")
-                section["surcharge_total"] = swapped_sur
-                section["cess"] = swapped_ces
-                sur = swapped_sur
-                ces = swapped_ces
-
-        if gtl > 0 and tax_base > 0:
-            calc_gtl = tax_base + sur + ces
-            if calc_gtl != gtl:
-                diff = gtl - calc_gtl
-                if diff > 0:
-                    if sur == 0 and ces > 0:
-                        section["surcharge_total"] = diff
-                        logger.info(f"Auto-corrected {section_key} Surcharge: {diff} (from Gross Tax Liability)")
-                    elif ces == 0 and sur > 0:
-                        section["cess"] = diff
-                        logger.info(f"Auto-corrected {section_key} Cess: {diff} (from Gross Tax Liability)")
-                    elif sur == 0 and ces == 0:
-                        pass
+    # Post-processing: auto-correct taxes paid components and Surcharge/Cess
+    roi_ref = data.get("roi", {})
+    for section_key in ("roi", "computed"):
+        _fix_tax_components(data.get(section_key), section_key, reference_roi=roi_ref if section_key == "computed" else None)
+        _fix_surcharge_and_cess(data.get(section_key), section_key, data.get("assessment_year", ""))
 
     # Sanity check: PGBP swap (Gemini sometimes swaps ROI and Computed for PGBP)
     roi_dict = data.get("roi") or {}

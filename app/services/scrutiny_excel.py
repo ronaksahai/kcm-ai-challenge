@@ -607,6 +607,28 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
               bold=True, num_fmt=NUM_FMT)
     cur_row += 1
 
+    # ── Income chargeable to tax at special rates ──────────
+    special_inc_row = cur_row
+    data_row(cur_row, "Income chargeable to tax at special rates",
+             "income_special_rates", "income_special_rates", "income_special_rates")
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA,
+              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    cur_row += 1
+
+    # ── Income chargeable to tax at normal rates ───────────
+    normal_inc_row = cur_row
+    data_row(cur_row, "Income chargeable to tax at normal rates",
+             None, None, None,
+             formula_b=f"={b}{ti_row}-{b}{special_inc_row}",
+             formula_c=f"={c}{ti_row}-{c}{special_inc_row}" if has_143_1 else None,
+             formula_d=f"={d}{ti_row}-{d}{special_inc_row}")
+    if has_cita:
+        e = cl(COL_CITA)
+        _cell(ws, cur_row, COL_CITA,
+              f"={e}{ti_row}-{e}{special_inc_row}", num_fmt=NUM_FMT)
+    cur_row += 1
+
     # ── Deemed Total Income u/s 115JB ────────────────────────
     # Use comp_data value for all columns — the 143(1) intimation often
     # confuses 115JB with GTI. The computation sheet is the reliable source.
@@ -633,6 +655,30 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     tax_ref_row = cur_row
     # Placeholder — will be filled with formula referencing note total
     _cell(ws, tax_ref_row, 1, "Tax as per Normal provision (Refer Note 1 below)", bold=True)
+    cur_row += 1
+
+    # Insert 115JAA credit row
+    credit_115_row = cur_row
+    _cell(ws, cur_row, 1, "Credit u/s 115JAA of tax paid in earlier years")
+    roi_credit_115 = _val(roi, "credit_115jaa") or 0
+    c1_credit_115 = _val(c1, "credit_115jaa") if has_143_1 else 0
+    c1_credit_115 = c1_credit_115 or 0
+    c3_credit_115 = _val(c3, "credit_115jaa") or 0
+    # Formulas will be filled after Note-1 is generated
+    cur_row += 1
+
+    # Tax payable after credit
+    tax_after_credit_row = cur_row
+    _cell(ws, cur_row, 1, "Tax payable after credit u/s 115JAA", bold=True)
+    
+    _cell(ws, cur_row, COL_ROI, f"={b}{tax_ref_row}-{b}{credit_115_row}", bold=True, num_fmt=NUM_FMT)
+    if has_143_1:
+        _cell(ws, cur_row, COL_C1, f"={c}{tax_ref_row}-{c}{credit_115_row}", bold=True, num_fmt=NUM_FMT)
+    _cell(ws, cur_row, COL_C3, f"={d}{tax_ref_row}-{d}{credit_115_row}", bold=True, num_fmt=NUM_FMT)
+    if has_cita:
+        e = cl(COL_CITA)
+        _cell(ws, cur_row, COL_CITA, f"={e}{tax_ref_row}-{e}{credit_115_row}", bold=True, num_fmt=NUM_FMT)
+    _cell(ws, cur_row, COL_CORRECTED, 0, num_fmt=NUM_FMT)
     cur_row += 1
 
     # Skip a row
@@ -710,13 +756,13 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     ttp_row = cur_row
     data_row(ttp_row, "Total Tax Payable ", None, None, None,
              bold=True,
-             formula_b=f"={b}{tax_ref_row}+{b}{total_int_row}",
-             formula_c=f"={c}{tax_ref_row}+{c}{total_int_row}",
-             formula_d=f"={d}{tax_ref_row}+{d}{total_int_row}")
+             formula_b=f"={b}{tax_after_credit_row}+{b}{total_int_row}",
+             formula_c=f"={c}{tax_after_credit_row}+{c}{total_int_row}" if has_143_1 else None,
+             formula_d=f"={d}{tax_after_credit_row}+{d}{total_int_row}")
     if has_cita:
         e = cl(COL_CITA)
         _cell(ws, ttp_row, COL_CITA,
-              f"={e}{tax_ref_row}+{e}{total_int_row}", bold=True, num_fmt=NUM_FMT)
+              f"={e}{tax_after_credit_row}+{e}{total_int_row}", bold=True, num_fmt=NUM_FMT)
     cur_row += 1
 
     # Skip a row
@@ -823,15 +869,21 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     ref_row = cur_row
     _cell(ws, cur_row, 1, "Less: Refund Already Issued")
     _cell(ws, cur_row, COL_ROI, 0, num_fmt=NUM_FMT)
+    
+    ref_issued_c1_raw = _val(c1, "refund_already_issued") if has_143_1 else 0
+    ref_issued_c1 = -abs(ref_issued_c1_raw) if ref_issued_c1_raw else 0
     if has_143_1:
-        _cell(ws, cur_row, COL_C1, 0, num_fmt=NUM_FMT)
-    ref_issued = _val(c3, "refund_already_issued")
-    _cell(ws, cur_row, COL_C3, ref_issued, num_fmt=NUM_FMT)
-    if ref_issued > 0:
+        _cell(ws, cur_row, COL_C1, ref_issued_c1, num_fmt=NUM_FMT)
+        
+    ref_issued_c3_raw = _val(c3, "refund_already_issued")
+    ref_issued_c3 = -abs(ref_issued_c3_raw) if ref_issued_c3_raw else 0
+    _cell(ws, cur_row, COL_C3, ref_issued_c3, num_fmt=NUM_FMT)
+    
+    if abs(ref_issued_c3) > 0:
         _cell(ws, cur_row, COL_REMARKS,
-              f"Refund of Rs. {int(ref_issued):,} already issued and adjusted")
+              f"Refund of Rs. {int(abs(ref_issued_c3)):,} already issued and adjusted")
     if has_cita:
-        _cell(ws, cur_row, COL_CITA, ref_issued, num_fmt=NUM_FMT)
+        _cell(ws, cur_row, COL_CITA, ref_issued_c3, num_fmt=NUM_FMT)
     cur_row += 1
 
     # Payable/(Refund)
@@ -839,7 +891,7 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     data_row(pay_row, "Payable /(Refund)", None, None, None,
              bold=True,
              formula_b=f"={b}{net_row}+{b}{int244a_row}-{b}{ref_row}",
-             formula_c=f"={c}{net_row}+{c}{int244a_row}-{c}{ref_row}",
+             formula_c=f"={c}{net_row}+{c}{int244a_row}-{c}{ref_row}" if has_143_1 else None,
              formula_d=f"={d}{net_row}+{d}{int244a_row}-{d}{ref_row}")
     if has_cita:
         e = cl(COL_CITA)
@@ -920,6 +972,8 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
                     computed_s_rate = best_rate
                 elif tax_base:
                     computed_s_rate = surcharge / tax_base
+
+            print(f"DEBUG _calculate_rates: data_type={type(data)}, is_roi={is_roi}, surcharge={surcharge}, tax_base={tax_base}, tax_normal={tax_normal}, tax_115jb={tax_115jb}, rates_to_try={rates_to_try if surcharge else []}, computed_s_rate={computed_s_rate}")
 
             if computed_s_rate:
                 if is_roi and s_roi_rate == 0:
@@ -1066,18 +1120,22 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
         col_idx = ord(nc) - 64 if len(nc) == 1 else None
         if col_idx:
             rate_str = n_roi_str if col_idx == COL_ROI else n_str
-            _cell(ws, cur_row, col_idx, f"={nc}{ti_row}*{rate_str}", num_fmt=NUM_FMT)
+            _cell(ws, cur_row, col_idx, f"={nc}{normal_inc_row}*{rate_str}", num_fmt=NUM_FMT)
     cur_row += 1
 
-    # Tax at special rates
+    # Tax at special rates (punched from extracted data)
     tax_special_row = cur_row
     _cell(ws, cur_row, 1, "Tax at special rates")
-    _cell(ws, cur_row, COL_ROI, 0, num_fmt=NUM_FMT)
+    roi_tax_special = _val(roi, "tax_special_rates")
+    c1_tax_special = _val(c1, "tax_special_rates") if has_143_1 else 0
+    c3_tax_special = _val(c3, "tax_special_rates")
+    _cell(ws, cur_row, COL_ROI, roi_tax_special, num_fmt=NUM_FMT)
     if has_143_1:
-        _cell(ws, cur_row, COL_C1, f"={b}{cur_row}", num_fmt=NUM_FMT)
-    _cell(ws, cur_row, COL_C3, 0, num_fmt=NUM_FMT)
+        # If C1 has its own value, use it; otherwise copy from ROI
+        _cell(ws, cur_row, COL_C1, c1_tax_special if c1_tax_special else roi_tax_special, num_fmt=NUM_FMT)
+    _cell(ws, cur_row, COL_C3, c3_tax_special, num_fmt=NUM_FMT)
     if has_cita:
-        _cell(ws, cur_row, COL_CITA, 0, num_fmt=NUM_FMT)
+        _cell(ws, cur_row, COL_CITA, c3_tax_special, num_fmt=NUM_FMT)
     _cell(ws, cur_row, COL_CORRECTED, 0, num_fmt=NUM_FMT)
     cur_row += 1
 
@@ -1110,9 +1168,6 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
             _cell(ws, cur_row, col_idx,
                   f"=MAX({nc}{tax_total_normal_row},{nc}{tax_115jb_row})",
                   bold=True, num_fmt=NUM_FMT)
-    cur_row += 1
-
-    # Skip a row
     cur_row += 1
 
     # Surcharge
@@ -1151,6 +1206,18 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
                   bold=True, num_fmt=NUM_FMT)
     cur_row += 1
 
+    # Add extracted Credit u/s 115JAA to Note-1
+    note_credit_115_row = cur_row
+    _cell(ws, cur_row, 1, "Credit u/s 115JAA of tax paid in earlier years")
+    _cell(ws, cur_row, COL_ROI, roi_credit_115, num_fmt=NUM_FMT)
+    if has_143_1:
+        c1_val = c1_credit_115 if c1_credit_115 else roi_credit_115
+        _cell(ws, cur_row, COL_C1, c1_val, num_fmt=NUM_FMT)
+    _cell(ws, cur_row, COL_C3, c3_credit_115, num_fmt=NUM_FMT)
+    if has_cita:
+        _cell(ws, cur_row, COL_CITA, c3_credit_115, num_fmt=NUM_FMT)
+    cur_row += 1
+
     # ── Now fill in the Tax reference row with Note-1 total ──
     _cell(ws, tax_ref_row, COL_ROI,
           f"={b}{grand_total_row}", bold=True, num_fmt=NUM_FMT)
@@ -1163,6 +1230,16 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
         e = cl(COL_CITA)
         _cell(ws, tax_ref_row, COL_CITA,
               f"={e}{grand_total_row}", bold=True, num_fmt=NUM_FMT)
+
+    # ── Now fill in the Credit 115JAA formulas with Note-1 dependencies ──
+    _cell(ws, credit_115_row, COL_ROI, f'=IF({b}{tax_total_normal_row}>{b}{tax_115jb_row}, {b}{note_credit_115_row}, 0)', num_fmt=NUM_FMT)
+    if has_143_1:
+        _cell(ws, credit_115_row, COL_C1, f'=IF({c}{tax_total_normal_row}>{c}{tax_115jb_row}, {c}{note_credit_115_row}, 0)', num_fmt=NUM_FMT)
+    _cell(ws, credit_115_row, COL_C3, f'=IF({d}{tax_total_normal_row}>{d}{tax_115jb_row}, {d}{note_credit_115_row}, 0)', num_fmt=NUM_FMT)
+    if has_cita:
+        e = cl(COL_CITA)
+        _cell(ws, credit_115_row, COL_CITA, f'=IF({e}{tax_total_normal_row}>{e}{tax_115jb_row}, {e}{note_credit_115_row}, 0)', num_fmt=NUM_FMT)
+    _cell(ws, credit_115_row, COL_CORRECTED, 0, num_fmt=NUM_FMT)
 
     # ── Apply number format to all data cells ────────────────
     max_col = len(headers)
