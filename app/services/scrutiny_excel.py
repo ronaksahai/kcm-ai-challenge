@@ -630,14 +630,23 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     cur_row += 1
 
     # ── Deemed Total Income u/s 115JB ────────────────────────
-    # Use comp_data value for all columns — the 143(1) intimation often
-    # confuses 115JB with GTI. The computation sheet is the reliable source.
     mat_inc_row = cur_row
-    mat_val = _val(c3, "income_115jb")
+    roi_mat = _val(roi, "income_115jb")
+    c1_mat = _val(c1, "income_115jb")
+    c3_mat = _val(c3, "income_115jb")
+    
+    cita_mat = None
+    if has_cita:
+        cita_mat = _val(cita_data, "income_115jb")
+        if not cita_mat:
+            mat_relief = sum(g.get("relief_amount", 0) for g in grounds if str(g.get("section", "")).upper() == "115JB")
+            cita_mat = c3_mat - mat_relief if c3_mat else None
+
     data_row(cur_row, "Deemed Total Income u/s 115JB",
-             roi_val=mat_val, c1_val=mat_val if has_143_1 else None,
-             c3_val=mat_val,
-             cita_val=mat_val if has_cita else None)
+             roi_val=roi_mat, 
+             c1_val=c1_mat if has_143_1 else None,
+             c3_val=c3_mat,
+             cita_val=cita_mat)
     cur_row += 1
 
     # ── Losses carried forward ───────────────────────────────
@@ -810,8 +819,11 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     data_row(cur_row, "         Regular Assessment Tax",
              "regular_tax", "regular_tax", "regular_tax")
     if has_cita:
-        _cell(ws, cur_row, COL_CITA,
-              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+        cita_rt = _val(cita_data, "regular_tax")
+        if cita_rt:
+            _cell(ws, cur_row, COL_CITA, cita_rt, num_fmt=NUM_FMT)
+        else:
+            _cell(ws, cur_row, COL_CITA, f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
     tax_paid_end = cur_row
     cur_row += 1
 

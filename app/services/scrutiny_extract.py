@@ -894,7 +894,9 @@ Return a JSON object with:
   ],
   "total_relief": number (sum of all relief_amount),
   "total_additions_by_ao": number (sum of all addition_amount),
-  "assessed_income_after_cita": number (if determinable from the order)
+  "assessed_income_after_cita": number (if determinable from the order),
+  "income_115jb": number (Net Book profit u/s 115JB after CIT(A) relief, if determinable),
+  "regular_tax": number (Regular Assessment Tax paid, usually mentioned in prepaid taxes in the OGE, if determinable)
 }
 
 Instructions:
