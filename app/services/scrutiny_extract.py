@@ -8,7 +8,7 @@ import tempfile
 import json
 import logging
 import PyPDF2
-import pymupdf  # PyMuPDF
+import pdfplumber
 from google import genai
 from google.genai import types
 
@@ -93,45 +93,37 @@ def _ask_gemini(prompt: str, pdf_path: str = None) -> dict:
 def _extract_pdf_text(pdf_path: str, password: str = None) -> str:
     """Extract all text from a PDF, optionally decrypting."""
     try:
-        doc = pymupdf.open(pdf_path)
-        if doc.needs_pass:
-            if not password:
-                raise ValueError("PDF is encrypted. Please provide the password.")
-            if not doc.authenticate(password):
-                raise ValueError("Incorrect password for PDF.")
+        # pdfplumber requires password to be empty string if not provided
+        pwd = password if password else ""
         pages = []
-        for i, page in enumerate(doc):
-            text = page.get_text() or ""
-            pages.append(f"--- Page {i+1} ---\n{text}")
-        doc.close()
+        with pdfplumber.open(pdf_path, password=pwd) as doc:
+            for i, page in enumerate(doc.pages):
+                text = page.extract_text(layout=True) or page.extract_text() or ""
+                pages.append(f"--- Page {i+1} ---\n{text}")
         return "\n\n".join(pages)
     except Exception as e:
-        logger.error(f"Failed to extract PDF text with PyMuPDF: {e}")
+        logger.error(f"Failed to extract PDF text with pdfplumber: {e}")
         return ""
 
 
 def _extract_english_pages(pdf_path: str, password: str) -> str:
     """Extract only English pages from Intimation PDF (skip Hindi)."""
     try:
-        doc = pymupdf.open(pdf_path)
-        if doc.needs_pass:
-            if not password:
-                raise ValueError("PDF is encrypted. Please provide the password.")
-            if not doc.authenticate(password):
-                raise ValueError("Incorrect password for PDF.")
+        pwd = password if password else ""
         pages = []
-        for i, page in enumerate(doc):
-            text = page.get_text() or ""
-            # English pages contain structured headers like "Sl.No.", "Particulars"
-            # and the text "Intimation u/s 143(1)" in English
-            if "Particulars" in text or "Reporting Heads" in text or "RETURN DETAILS" in text:
-                pages.append(f"--- Page {i+1} ---\n{text}")
-            elif "Mismatch between Tax Credits" in text or "Notes:" in text:
-                pages.append(f"--- Page {i+1} ---\n{text}")
-        doc.close()
+        with pdfplumber.open(pdf_path, password=pwd) as doc:
+            for i, page in enumerate(doc.pages):
+                # Try layout extraction first to preserve columns
+                text = page.extract_text(layout=True) or page.extract_text() or ""
+                # English pages contain structured headers like "Sl.No.", "Particulars"
+                # and the text "Intimation u/s 143(1)" in English
+                if "Particulars" in text or "Reporting Heads" in text or "RETURN DETAILS" in text:
+                    pages.append(f"--- Page {i+1} ---\n{text}")
+                elif "Mismatch between Tax Credits" in text or "Notes:" in text:
+                    pages.append(f"--- Page {i+1} ---\n{text}")
         return "\n\n".join(pages)
     except Exception as e:
-        logger.error(f"Failed to extract English pages with PyMuPDF: {e}")
+        logger.error(f"Failed to extract English pages with pdfplumber: {e}")
         return ""
 
 
@@ -178,6 +170,45 @@ def _fix_mangled_intimation_fields(section: dict, section_name: str):
                     if swapped_sur_candidate == tif:
                         section["total_interest_fee"] = 0
                     logger.info(f"Fixed swapped/duplicated Surcharge -> 234B/Total_Interest in {section_name}")
+
+    # 3. TDS / Interest Shift Detection
+    # PyMuPDF often shifts TDS into 234C, and 234C into 234B.
+    ttp = section.get("total_taxes_paid", 0) or 0
+    adv = section.get("advance_tax", 0) or 0
+    sat = section.get("self_assessment_tax", 0) or 0
+    tcs = section.get("tcs", 0) or 0
+    reg = section.get("regular_tax", 0) or 0
+    
+    expected_tds = ttp - (adv + sat + tcs + reg)
+    if expected_tds > 0:
+        i234c = section.get("interest_234c", 0) or 0
+        i234b = section.get("interest_234b", 0) or 0
+        
+        # Sometimes it shifts TDS to 234C, sometimes to 234B
+        if i234c == expected_tds or i234b == expected_tds:
+            logger.info(f"Detected TDS shifted to Interest in {section_name}. Fixing chain.")
+            section["tds"] = expected_tds
+            
+            # Zero out the incorrectly shifted TDS
+            if i234c == expected_tds: section["interest_234c"] = 0
+            if i234b == expected_tds: section["interest_234b"] = 0
+            
+            # Re-read them after zeroing out
+            i234c = section.get("interest_234c", 0) or 0
+            i234b = section.get("interest_234b", 0) or 0
+            
+            agg = section.get("aggregate_liability", 0) or 0
+            gtl = section.get("gross_tax_liability", 0) or 0
+            
+            # The true total interest should be agg - gtl
+            true_int = agg - gtl
+            
+            # If the true interest matches whatever got shifted up into 234B, move it back down
+            if true_int > 0 and i234b == true_int and i234b > 0:
+                section["interest_234c"] = true_int
+                section["interest_234b"] = 0
+                section["total_interest_fee"] = true_int
+                logger.info(f"Fixed shifted 234C -> 234B in {section_name}")
 
 
 def _fix_tax_components(section: dict, section_name: str, reference_roi: dict = None):
@@ -668,11 +699,14 @@ def extract_intimation_order(pdf_path: str, password: str, progress_cb=None) -> 
                 logger.info(f"Computed {section_key} credit_115jaa fallback: {section['credit_115jaa']}")
 
     # Post-processing: auto-correct taxes paid components and Surcharge/Cess
+    import json
+    logger.info(f"BEFORE POST-PROC: {json.dumps(data, indent=2)}")
     roi_ref = data.get("roi", {})
     for section_key in ("roi", "computed"):
         _fix_mangled_intimation_fields(data.get(section_key), section_key)
         _fix_tax_components(data.get(section_key), section_key, reference_roi=roi_ref if section_key == "computed" else None)
         _fix_surcharge_and_cess(data.get(section_key), section_key, data.get("assessment_year", ""))
+    logger.info(f"AFTER POST-PROC: {json.dumps(data, indent=2)}")
 
     # Sanity check: PGBP swap (Gemini sometimes swaps ROI and Computed for PGBP)
     roi_dict = data.get("roi") or {}
