@@ -155,9 +155,13 @@ def _fix_mangled_intimation_fields(section: dict, section_name: str):
     if swapped_sur_candidate > 0:
         tax_base = max(section.get("tax_on_total_income", 0) or 0, section.get("tax_115jb", 0) or 0)
         if tax_base > 0:
+            # Check if the extracted surcharge is ALREADY a valid rate (7%, 10%, 12%, 15%, 25%, 37%)
+            sur_rate = sur / tax_base if sur > 0 else 0
+            is_sur_valid = any(abs(sur_rate - r) < 0.01 for r in [0.07, 0.10, 0.12, 0.15, 0.25, 0.37])
+            
             rate_candidate = swapped_sur_candidate / tax_base
             # If candidate is exactly 7% or 12% of the tax base (standard corporate surcharge rates)
-            if 0.065 < rate_candidate < 0.075 or 0.115 < rate_candidate < 0.125:
+            if (0.065 < rate_candidate < 0.075 or 0.115 < rate_candidate < 0.125) and not is_sur_valid:
                 if sur <= swapped_sur_candidate:
                     # Surcharge is probably Cess or 0, OR it was correctly extracted but duplicated
                     if sur > 0 and sur < swapped_sur_candidate:
