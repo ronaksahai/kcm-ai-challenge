@@ -172,8 +172,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    btnDownloadPdf.addEventListener('click', () => { if (currentJobId) window.open(`/api/translate/download/${currentJobId}/pdf`, '_blank'); });
-    btnDownloadRtf.addEventListener('click', () => { if (currentJobId) window.open(`/api/translate/download/${currentJobId}/rtf`, '_blank'); });
+    btnDownloadPdf.addEventListener('click', () => { if (currentJobId) window.location.href = `/api/translate/download/${currentJobId}/pdf`; });
+    btnDownloadRtf.addEventListener('click', () => { if (currentJobId) window.location.href = `/api/translate/download/${currentJobId}/rtf`; });
 
     btnPreviewToggle.addEventListener('click', async () => {
         if (previewArea.classList.contains('hidden')) {
@@ -353,7 +353,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Download Excel
     document.getElementById('btnDownloadExcel').addEventListener('click', () => {
-        if (scrutinyJobId) window.open(`/api/scrutiny/download/${scrutinyJobId}`, '_blank');
+        if (scrutinyJobId) window.location.href = `/api/scrutiny/download/${scrutinyJobId}`;
     });
 
     // New scrutiny / retry
@@ -501,12 +501,11 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch { emailPreviewContent.textContent = 'Failed to load email message.'; }
     }
 
-    // Downloads
     document.getElementById('btnDownloadReplyDocx').addEventListener('click', () => {
-        if (noticeJobId) window.open(`/api/notice-reply/download/${noticeJobId}/docx`, '_blank');
+        if (noticeJobId) window.location.href = `/api/notice-reply/download/${noticeJobId}/docx`;
     });
     document.getElementById('btnDownloadDetailsXlsx').addEventListener('click', () => {
-        if (noticeJobId) window.open(`/api/notice-reply/download/${noticeJobId}/xlsx`, '_blank');
+        if (noticeJobId) window.location.href = `/api/notice-reply/download/${noticeJobId}/xlsx`;
     });
 
     // Email toggle & copy
