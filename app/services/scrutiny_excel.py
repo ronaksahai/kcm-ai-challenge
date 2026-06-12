@@ -468,12 +468,28 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     expected_sum_of_heads = (_val(c3, "gross_total_income") or 0) + (_val(c3, "current_year_loss_setoff") or 0) + (_val(c3, "brought_forward_loss_setoff") or 0)
 
     overall_diff = expected_sum_of_heads - (sum_d_base + sum_adds)
+    
+    # ── Math Rescue: Missing Loss Setoffs in 143(3) ────────────────
+    # If the AO order states Total Income but leaves the loss setoff implicit, 
+    # overall_diff will exactly match the missing loss setoff as a negative number.
+    if overall_diff < 0 and _val(c3, "brought_forward_loss_setoff") == 0:
+        roi_bf = _val(base_data, "brought_forward_loss_setoff") or 0
+        if roi_bf > 0 and abs(overall_diff + roi_bf) < 10:
+            c3["brought_forward_loss_setoff"] = roi_bf
+            overall_diff = 0
+            
+    if overall_diff < 0 and _val(c3, "current_year_loss_setoff") == 0:
+        roi_cy = _val(base_data, "current_year_loss_setoff") or 0
+        if roi_cy > 0 and abs(overall_diff + roi_cy) < 10:
+            c3["current_year_loss_setoff"] = roi_cy
+            overall_diff = 0
+
     if overall_diff != 0:
         label = "Add: Other unaccounted adjustments as per computation sheet" if overall_diff > 0 else "Less: Other unaccounted reductions as per computation sheet"
         _cell(ws, cur_row, 1, label)
         _cell(ws, cur_row, COL_C3, overall_diff, num_fmt=NUM_FMT)
-        if has_cita:
-            _cell(ws, cur_row, COL_CITA, overall_diff, num_fmt=NUM_FMT)
+        # We purposely do NOT copy 143(3) balancing figures to the CIT(A) column, 
+        # as CIT(A) operates on explicit grounds and has independent math.
         _cell(ws, cur_row, COL_REMARKS, "Balancing figure to match Gross Total Income in computation sheet")
         cur_row += 1
 

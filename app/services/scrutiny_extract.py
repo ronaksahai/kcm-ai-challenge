@@ -905,6 +905,8 @@ Return a JSON object with:
 
 Instructions:
 - Read the ENTIRE order thoroughly. Each ground must be analyzed individually.
+- CRITICAL: Be EXTREMELY CAREFUL not to mix up different grounds. The reasoning, decision, and status for one ground must NEVER be applied to another ground.
+- If a ground is explicitly dismissed in the CIT(A) order, the relief_amount MUST be 0 and the status MUST be 'dismissed'. Do not invent an 'allowed' status or copy reasoning from other grounds.
 - General grounds (like "The order of the AO is erroneous" or "The CIT(A) erred in...") that don't relate to a specific monetary addition should be EXCLUDED.
 - For "allowed for statistical purpose" or "set aside" grounds, relief_amount MUST be 0 (the addition stays pending further proceedings).
 - Parse Indian number format: 42,24,669 = 4224669
