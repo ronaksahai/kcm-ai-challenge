@@ -698,41 +698,29 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     cur_row += 1
 
     int_start = cur_row
-    data_row(cur_row, "       Interest U/s 234A",
-             "interest_234a", "interest_234a", "interest_234a")
-    if has_cita:
-        _cell(ws, cur_row, COL_CITA,
-              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
-    cur_row += 1
+    
+    # helper for interest rows
+    def _int_row(label, key):
+        nonlocal cur_row
+        formula_e = None
+        cita_val = None
+        if has_cita:
+            if cita_data.get(key) is not None:
+                cita_val = cita_data.get(key)
+            else:
+                formula_e = f"={cl(COL_C3)}{cur_row}"
+                
+        data_row(cur_row, label, key, key, key,
+                 cita_val=cita_val, formula_e=formula_e)
+        cur_row += 1
 
-    data_row(cur_row, "       Interest U/s 234B",
-             "interest_234b", "interest_234b", "interest_234b")
-    if has_cita:
-        _cell(ws, cur_row, COL_CITA,
-              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
-    cur_row += 1
-
-    data_row(cur_row, "       Interest U/s 234C",
-             "interest_234c", "interest_234c", "interest_234c")
-    if has_cita:
-        _cell(ws, cur_row, COL_CITA,
-              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
-    cur_row += 1
-
-    data_row(cur_row, "       Interest U/s 234D",
-             "interest_234d", "interest_234d", "interest_234d")
-    if has_cita:
-        _cell(ws, cur_row, COL_CITA,
-              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
-    cur_row += 1
-
-    data_row(cur_row, "       FEE FOR DEFAULT IN FURNISHING \nRETURN OF INCOME (SECTION 234F)",
-             "fee_234f", "fee_234f", "fee_234f")
-    if has_cita:
-        _cell(ws, cur_row, COL_CITA,
-              f"={cl(COL_C3)}{cur_row}", num_fmt=NUM_FMT)
+    _int_row("       Interest U/s 234A", "interest_234a")
+    _int_row("       Interest U/s 234B", "interest_234b")
+    _int_row("       Interest U/s 234C", "interest_234c")
+    _int_row("       Interest U/s 234D", "interest_234d")
+    
     int_end = cur_row
-    cur_row += 1
+    _int_row("       FEE FOR DEFAULT IN FURNISHING \nRETURN OF INCOME (SECTION 234F)", "fee_234f")
 
     # Total interest
     total_int_row = cur_row
@@ -742,6 +730,11 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
     if has_143_1:
         _cell(ws, total_int_row, COL_C1,
               f"=SUM({c}{int_start}:{c}{int_end})", num_fmt=NUM_FMT)
+    _cell(ws, total_int_row, COL_C3,
+          f"=SUM({cl(COL_C3)}{int_start}:{cl(COL_C3)}{int_end})", num_fmt=NUM_FMT)
+    if has_cita:
+        _cell(ws, total_int_row, COL_CITA,
+              f"=SUM({cl(COL_CITA)}{int_start}:{cl(COL_CITA)}{int_end})", num_fmt=NUM_FMT)
 
     total_int = _val(c3, "total_interest_fee")
     if total_int > 0:
@@ -939,9 +932,12 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
         """Deduce tax/surcharge/cess rates from extracted data.
         Returns multiple rates as clean floats plus formatted percentage strings.
         """
-        n_rate = n_roi_rate = m_rate = 0.0
-        s_rate = s_roi_rate = 0.0
-        c_rate = c_roi_rate = 0.0
+        n_rate = n_roi_rate = m_rate = -1.0
+        s_rate = s_roi_rate = -1.0
+        c_rate = c_roi_rate = -1.0
+        
+        s_on_special = False
+        s_roi_on_special = False
 
         for data in sources:
             if not data:
@@ -950,7 +946,7 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
             is_roi = (data is roi) or (has_143_1 and data is c1)
 
             # MAT Rate
-            if m_rate == 0:
+            if m_rate == -1.0:
                 inc_mat = _val(data, "income_115jb")
                 tax_mat = _val(data, "tax_115jb")
                 if inc_mat and tax_mat:
@@ -958,56 +954,69 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
 
             # Surcharge Rate
             surcharge = _val(data, "surcharge_total") or 0
-            tax_normal = _val(data, "tax_normal_rates") or _val(data, "tax_on_total_income") or 0
+            tax_special = _val(data, "tax_special_rates") or 0
+            tax_normal = (_val(data, "tax_normal_rates") or _val(data, "tax_on_total_income") or 0) + tax_special
             tax_115jb = _val(data, "tax_115jb") or 0
             tax_base = max(tax_normal, tax_115jb)
             
-            computed_s_rate = 0
+            computed_s_rate = -1.0
+            is_special_surcharge = False
+            
             if surcharge:
                 rates_to_try = []
-                if tax_base: rates_to_try.append(surcharge / tax_base)
-                if tax_normal: rates_to_try.append(surcharge / tax_normal)
-                if tax_115jb: rates_to_try.append(surcharge / tax_115jb)
+                if tax_special: rates_to_try.append((surcharge / tax_special, True))
+                if tax_base: rates_to_try.append((surcharge / tax_base, False))
+                if tax_normal: rates_to_try.append((surcharge / tax_normal, False))
+                if tax_115jb: rates_to_try.append((surcharge / tax_115jb, False))
                 
                 # Standard Indian surcharge rates
                 standard_rates = [0.02, 0.05, 0.07, 0.10, 0.12, 0.15, 0.25, 0.37]
-                best_rate = 0
+                best_rate = -1.0
                 best_diff = 1.0
-                for r in rates_to_try:
+                for r, is_spec in rates_to_try:
                     for sr in standard_rates:
                         diff = abs(r - sr)
                         if diff < best_diff and diff < 0.01: # Within 1%
                             best_rate = sr
                             best_diff = diff
+                            is_special_surcharge = is_spec
                             
-                if best_rate > 0:
+                if best_rate >= 0:
                     computed_s_rate = best_rate
                 elif tax_base:
-                    computed_s_rate = surcharge / tax_base
+                    # Bound the fallback rate to a maximum of 37% (the highest Indian surcharge)
+                    fallback_s_rate = surcharge / tax_base
+                    if fallback_s_rate <= 0.40:
+                        computed_s_rate = fallback_s_rate
+                        is_special_surcharge = False
+            else:
+                computed_s_rate = 0.0
+                is_special_surcharge = False
 
-            print(f"DEBUG _calculate_rates: data_type={type(data)}, is_roi={is_roi}, surcharge={surcharge}, tax_base={tax_base}, tax_normal={tax_normal}, tax_115jb={tax_115jb}, rates_to_try={rates_to_try if surcharge else []}, computed_s_rate={computed_s_rate}")
-
-            if computed_s_rate:
-                if is_roi and s_roi_rate == 0:
+            if computed_s_rate >= 0:
+                if is_roi and s_roi_rate == -1.0:
                     s_roi_rate = computed_s_rate
-                elif not is_roi and s_rate == 0:
+                    s_roi_on_special = is_special_surcharge
+                elif not is_roi and s_rate == -1.0:
                     s_rate = computed_s_rate
+                    s_on_special = is_special_surcharge
 
             # Cess Rate
             cess = _val(data, "cess") or 0
-            computed_c_rate = 0
+            computed_c_rate = -1.0
             if cess:
                 rates_to_try = []
                 if tax_base: rates_to_try.append(cess / (tax_base + surcharge))
                 if tax_normal: rates_to_try.append(cess / (tax_normal + surcharge))
                 if tax_115jb: rates_to_try.append(cess / (tax_115jb + surcharge))
                 
-                if tax_base: rates_to_try.append(cess / (tax_base * (1 + computed_s_rate)))
-                if tax_normal: rates_to_try.append(cess / (tax_normal * (1 + computed_s_rate)))
-                if tax_115jb: rates_to_try.append(cess / (tax_115jb * (1 + computed_s_rate)))
+                if computed_s_rate >= 0:
+                    if tax_base: rates_to_try.append(cess / (tax_base * (1 + computed_s_rate)))
+                    if tax_normal: rates_to_try.append(cess / (tax_normal * (1 + computed_s_rate)))
+                    if tax_115jb: rates_to_try.append(cess / (tax_115jb * (1 + computed_s_rate)))
 
                 standard_cess = [0.03, 0.04]
-                best_c_rate = 0
+                best_c_rate = -1.0
                 best_diff = 1.0
                 for r in rates_to_try:
                     for sr in standard_cess:
@@ -1019,39 +1028,46 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
                 if best_c_rate > 0:
                     computed_c_rate = best_c_rate
                 elif tax_base:
-                    computed_c_rate = cess / (tax_base + surcharge)
+                    fallback_c_rate = cess / (tax_base + surcharge)
+                    # Bound the fallback cess to a maximum of 5% to avoid absurd rates
+                    if fallback_c_rate <= 0.05:
+                        computed_c_rate = fallback_c_rate
+            else:
+                computed_c_rate = 0.0
 
-            if computed_c_rate:
-                if is_roi and c_roi_rate == 0:
+            if computed_c_rate >= 0:
+                if is_roi and c_roi_rate == -1.0:
                     c_roi_rate = computed_c_rate
-                elif not is_roi and c_rate == 0:
+                elif not is_roi and c_rate == -1.0:
                     c_rate = computed_c_rate
 
             # Normal Rate
+            tax_normal_val = _val(data, "tax_normal_rates") or _val(data, "tax_on_total_income") or 0
             inc_normal_raw = data.get("income_normal_rates")
+
             if inc_normal_raw is not None and inc_normal_raw != 0:
                 inc_normal = inc_normal_raw
-            elif inc_normal_raw == 0:
-                inc_normal = 0
-                if data is roi:
-                    n_roi_rate = 0.0
-                elif n_rate == 0:
-                    n_rate = 0.0
             else:
-                inc_normal = _val(data, "total_income")
-            
-            tax_normal = _val(data, "tax_normal_rates") or _val(data, "tax_on_total_income")
-            if inc_normal and tax_normal:
-                computed_rate = tax_normal / inc_normal
+                inc_total = _val(data, "total_income") or 0
+                inc_special = _val(data, "income_special_rates") or 0
+                inc_normal = inc_total - inc_special
+                if inc_normal < 0:
+                    inc_normal = 0
+
+            computed_rate = -1.0
+            if inc_normal > 0 and tax_normal_val >= 0:
+                computed_rate = tax_normal_val / inc_normal
+                
+            if computed_rate >= 0:
                 if data is roi:
                     n_roi_rate = computed_rate
-                elif n_rate == 0:
+                elif n_rate == -1.0:
                     n_rate = computed_rate
 
         # Fallbacks
-        m_rate = m_rate if m_rate else 0.185
-        s_rate = s_rate if s_rate else 0.0
-        s_roi_rate = s_roi_rate if s_roi_rate else s_rate
+        m_rate = m_rate if m_rate >= 0 else 0.185
+        s_rate = s_rate if s_rate >= 0 else 0.0
+        s_roi_rate = s_roi_rate if s_roi_rate >= 0 else s_rate
 
         # AY-based cess default: 3% for AY <= 2018-19, 4% for AY >= 2019-20
         default_cess = 0.04
@@ -1065,10 +1081,10 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
         except (ValueError, IndexError):
             pass
 
-        c_rate = c_rate if c_rate else default_cess
-        c_roi_rate = c_roi_rate if c_roi_rate else c_rate
-        n_rate = n_rate if n_rate else 0.30
-        n_roi_rate = n_roi_rate if n_roi_rate else n_rate
+        c_rate = c_rate if c_rate >= 0 else default_cess
+        c_roi_rate = c_roi_rate if c_roi_rate >= 0 else c_rate
+        n_rate = n_rate if n_rate >= 0 else 0.30
+        n_roi_rate = n_roi_rate if n_roi_rate >= 0 else n_rate
 
         # Round to nearest 0.5%
         def _snap(r):
@@ -1089,10 +1105,12 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
             return f"{v:g}%"
 
         return (n_rate, n_roi_rate, m_rate, s_rate, s_roi_rate, c_rate, c_roi_rate,
-                fmt(n_rate), fmt(n_roi_rate), fmt(m_rate), fmt(s_rate), fmt(s_roi_rate), fmt(c_rate), fmt(c_roi_rate))
+                fmt(n_rate), fmt(n_roi_rate), fmt(m_rate), fmt(s_rate), fmt(s_roi_rate), fmt(c_rate), fmt(c_roi_rate),
+                s_on_special, s_roi_on_special)
 
     (n_val, n_roi_val, m_val, s_val, s_roi_val, c_val, c_roi_val,
-     n_str, n_roi_str, m_str, s_str, s_roi_str, c_str, c_roi_str) = _calculate_rates([roi, c1, c3])
+     n_str, n_roi_str, m_str, s_str, s_roi_str, c_str, c_roi_str,
+     s_on_special, s_roi_on_special) = _calculate_rates([roi, c1, c3])
 
     # ── Note-1: Calculation of Tax ───────────────────────────
     if progress_cb:
@@ -1184,14 +1202,26 @@ def generate_scrutiny_excel(comp_data: dict, intim_data: dict,
 
     # Surcharge
     surcharge_row = cur_row
-    rate_text = f"{s_str}" if s_str == s_roi_str else f"ROI: {s_roi_str}, 143(3): {s_str}"
+    
+    if s_str == s_roi_str and s_on_special == s_roi_on_special:
+        label_suffix = " (on 115BBE)" if s_on_special else ""
+        rate_text = f"{s_str}{label_suffix}"
+    else:
+        roi_suffix = " (on 115BBE)" if s_roi_on_special else ""
+        ao_suffix = " (on 115BBE)" if s_on_special else ""
+        rate_text = f"ROI: {s_roi_str}{roi_suffix}, 143(3): {s_str}{ao_suffix}"
+        
     _cell(ws, cur_row, 1, f"Surcharge @ {rate_text}")
     for nc in note_cols:
         col_idx = ord(nc) - 64 if len(nc) == 1 else None
         if col_idx:
-            s_rate_str = s_roi_str if col_idx in [COL_ROI, COL_C1] else s_str
+            is_roi_col = col_idx in [COL_ROI, COL_C1]
+            s_rate_str = s_roi_str if is_roi_col else s_str
+            is_spec_col = s_roi_on_special if is_roi_col else s_on_special
+            
+            base_row = tax_special_row if is_spec_col else tax_higher_row
             _cell(ws, cur_row, col_idx,
-                  f"={nc}{tax_higher_row}*{s_rate_str}", num_fmt=NUM_FMT)
+                  f"={nc}{base_row}*{s_rate_str}", num_fmt=NUM_FMT)
     cur_row += 1
 
     # Cess

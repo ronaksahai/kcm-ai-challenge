@@ -6,6 +6,7 @@ and serves the web UI.
 """
 
 import os
+import json
 import uuid
 import logging
 import threading
@@ -22,7 +23,7 @@ from flask import (
 
 from app.config import (
     SARVAM_API_KEY,
-    GEMINI_API_KEY,
+    GCP_PROJECT_ID,
     UPLOAD_FOLDER,
     OUTPUT_DIR,
     TEMP_DIR,
@@ -152,6 +153,19 @@ def translation_status(job_id):
     })
 
 
+def _open_file_natively(file_path):
+    import sys
+    import subprocess
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", file_path])
+        elif sys.platform == "win32":
+            import os
+            os.startfile(file_path)
+    except Exception as e:
+        logger.error(f"Failed to open file natively: {e}")
+
+
 @app.route("/api/translate/download/<job_id>/<file_format>")
 def download_translation(job_id, file_format):
     """Download the translated document as PDF or RTF."""
@@ -179,6 +193,8 @@ def download_translation(job_id, file_format):
     original_name = job.get("original_filename", "document")
     base_name = os.path.splitext(original_name)[0]
     download_name = f"{base_name}_translated.{file_format}"
+
+    _open_file_natively(file_path)
 
     response = send_file(
         file_path,
@@ -311,82 +327,183 @@ def _update_job(job_id: str, **kwargs):
 
 @app.route("/api/scrutiny/config")
 def scrutiny_config():
-    """Check if Gemini API key is configured for Order Scrutiny."""
-    has_key = bool(GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_api_key_here")
+    """Check if GCP Project ID is configured for Order Scrutiny."""
+    has_key = bool(GCP_PROJECT_ID and GCP_PROJECT_ID != "your_gcp_project_id_here")
     return jsonify({"configured": has_key})
+
+
+@app.route("/api/scrutiny/classify", methods=["POST"])
+def classify_scrutiny_files():
+    """
+    Classify uploaded PDFs into document types.
+    Accepts multipart form with files named 'files'.
+    Returns JSON array of classification results.
+    """
+    if not GCP_PROJECT_ID or GCP_PROJECT_ID == "your_gcp_project_id_here":
+        return jsonify({"error": "GCP Project ID is not configured."}), 400
+
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "No files uploaded."}), 400
+
+    # Save files temporarily and classify
+    classify_id = str(uuid.uuid4())[:8]
+    file_paths = []
+    for i, f in enumerate(files):
+        if f.filename and f.filename.lower().endswith(".pdf"):
+            saved_path = os.path.join(UPLOAD_FOLDER, f"{classify_id}_{i}_{f.filename}")
+            f.save(saved_path)
+            file_paths.append((f.filename, saved_path))
+
+    if not file_paths:
+        return jsonify({"error": "No valid PDF files found."}), 400
+
+    from app.services.scrutiny_classify import classify_files
+    results = classify_files(file_paths)
+
+    # Return results (keep saved_path for later use by bulk submit)
+    return jsonify({
+        "classify_id": classify_id,
+        "files": [{
+            "filename": r["filename"],
+            "saved_path": r["saved_path"],
+            "type": r["type"],
+            "label": r["label"],
+            "confidence": r["confidence"],
+            "date": r.get("date"),
+            "method": r["method"],
+        } for r in results]
+    })
 
 
 @app.route("/api/scrutiny", methods=["POST"])
 def start_scrutiny():
     """
     Upload PDFs and start the Order Scrutiny pipeline.
-    Expects multipart form with:
-    - computation_sheet (required PDF)
-    - intimation_order (required PDF)
-    - intimation_password (required string)
-    - assessment_order (required PDF)
-    - cita_order (optional PDF — CIT(A) order u/s 250)
+
+    Supports two modes:
+    1. Individual mode (original): separate fields for each document type
+    2. Bulk mode: files already saved by /api/scrutiny/classify,
+       submitted with type assignments as JSON
     """
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
-        return jsonify({"error": "Gemini API key is not configured. "
-                        "Please set GEMINI_API_KEY in the .env file."}), 400
+    if not GCP_PROJECT_ID or GCP_PROJECT_ID == "your_gcp_project_id_here":
+        return jsonify({"error": "GCP Project ID is not configured. "
+                        "Please set GCP_PROJECT_ID in the .env file."}), 400
 
-    # Validate computation sheet
-    if "computation_sheet" not in request.files:
-        return jsonify({"error": "Computation Sheet PDF is required."}), 400
-    comp_file = request.files["computation_sheet"]
-    if not comp_file.filename or not comp_file.filename.lower().endswith(".pdf"):
-        return jsonify({"error": "Computation Sheet must be a PDF file."}), 400
+    mode = request.form.get("mode", "individual")
 
-    # Validate intimation order
-    if "intimation_order" not in request.files:
-        return jsonify({"error": "Intimation Order PDF is required."}), 400
-    intim_file = request.files["intimation_order"]
-    if not intim_file.filename or not intim_file.filename.lower().endswith(".pdf"):
-        return jsonify({"error": "Intimation Order must be a PDF file."}), 400
+    if mode == "bulk":
+        # Bulk mode: files are pre-saved, assignments come as JSON
+        assignments_json = request.form.get("assignments", "[]")
+        try:
+            assignments = json.loads(assignments_json)
+        except (json.JSONDecodeError, TypeError):
+            return jsonify({"error": "Invalid assignments data."}), 400
 
-    # Validate password
-    intim_password = request.form.get("intimation_password", "").strip()
+        intim_password = request.form.get("intimation_password", "").strip()
 
-    # Validate assessment order (required)
-    if "assessment_order" not in request.files:
-        return jsonify({"error": "Assessment Order PDF is required."}), 400
-    ao_file = request.files["assessment_order"]
-    if not ao_file.filename or not ao_file.filename.lower().endswith(".pdf"):
-        return jsonify({"error": "Assessment Order must be a PDF file."}), 400
+        # Map assignments to paths
+        comp_path = None
+        intim_path = None
+        ao_path = None
+        cita_path = None
+        cita_comp_path = None
 
-    # Optional CIT(A) order
-    cita_file = request.files.get("cita_order")
-    
-    # Optional CIT(A) computation sheet
-    cita_comp_file = request.files.get("cita_comp_sheet")
+        job_id = str(uuid.uuid4())
 
-    # Save files
-    job_id = str(uuid.uuid4())
+        for a in assignments:
+            src = a.get("saved_path")
+            doc_type = a.get("type")
+            if not src or not doc_type or not os.path.exists(src):
+                continue
 
-    comp_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_comp.pdf")
-    comp_file.save(comp_path)
+            # Move file to job-specific name
+            if doc_type == "computation_sheet":
+                comp_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_comp.pdf")
+                os.rename(src, comp_path)
+            elif doc_type == "intimation_order":
+                intim_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_intim.pdf")
+                os.rename(src, intim_path)
+            elif doc_type == "assessment_order":
+                ao_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_ao.pdf")
+                os.rename(src, ao_path)
+            elif doc_type == "cita_order":
+                cita_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_cita.pdf")
+                os.rename(src, cita_path)
+            elif doc_type == "cita_comp_sheet":
+                cita_comp_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_cita_comp.pdf")
+                os.rename(src, cita_comp_path)
 
-    intim_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_intim.pdf")
-    intim_file.save(intim_path)
+        # Validate required files
+        if not comp_path:
+            return jsonify({"error": "Computation Sheet is required."}), 400
+        if not intim_path:
+            return jsonify({"error": "Intimation Order / ITR is required."}), 400
+        if not ao_path:
+            return jsonify({"error": "Assessment Order is required."}), 400
 
-    ao_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_ao.pdf")
-    ao_file.save(ao_path)
+        logger.info(f"Scrutiny bulk upload: comp={bool(comp_path)}, "
+                    f"intim={bool(intim_path)}, ao={bool(ao_path)}, "
+                    f"cita={bool(cita_path)}, cita_comp={bool(cita_comp_path)}")
 
-    cita_path = None
-    if cita_file and cita_file.filename and cita_file.filename.lower().endswith(".pdf"):
-        cita_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_cita.pdf")
-        cita_file.save(cita_path)
+    else:
+        # Individual mode (original flow)
+        # Validate computation sheet
+        if "computation_sheet" not in request.files:
+            return jsonify({"error": "Computation Sheet PDF is required."}), 400
+        comp_file = request.files["computation_sheet"]
+        if not comp_file.filename or not comp_file.filename.lower().endswith(".pdf"):
+            return jsonify({"error": "Computation Sheet must be a PDF file."}), 400
 
-    cita_comp_path = None
-    if cita_comp_file and cita_comp_file.filename and cita_comp_file.filename.lower().endswith(".pdf"):
-        cita_comp_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_cita_comp.pdf")
-        cita_comp_file.save(cita_comp_path)
+        # Validate intimation order
+        if "intimation_order" not in request.files:
+            return jsonify({"error": "Intimation Order PDF is required."}), 400
+        intim_file = request.files["intimation_order"]
+        if not intim_file.filename or not intim_file.filename.lower().endswith(".pdf"):
+            return jsonify({"error": "Intimation Order must be a PDF file."}), 400
 
-    logger.info(f"Scrutiny files uploaded: comp={comp_file.filename}, "
-                f"intim={intim_file.filename}, ao={ao_file.filename}, "
-                f"cita={cita_file.filename if cita_file else 'N/A'}, "
-                f"cita_comp={cita_comp_file.filename if cita_comp_file else 'N/A'}")
+        # Validate password
+        intim_password = request.form.get("intimation_password", "").strip()
+
+        # Validate assessment order (required)
+        if "assessment_order" not in request.files:
+            return jsonify({"error": "Assessment Order PDF is required."}), 400
+        ao_file = request.files["assessment_order"]
+        if not ao_file.filename or not ao_file.filename.lower().endswith(".pdf"):
+            return jsonify({"error": "Assessment Order must be a PDF file."}), 400
+
+        # Optional CIT(A) order
+        cita_file = request.files.get("cita_order")
+
+        # Optional CIT(A) computation sheet
+        cita_comp_file = request.files.get("cita_comp_sheet")
+
+        # Save files
+        job_id = str(uuid.uuid4())
+
+        comp_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_comp.pdf")
+        comp_file.save(comp_path)
+
+        intim_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_intim.pdf")
+        intim_file.save(intim_path)
+
+        ao_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_ao.pdf")
+        ao_file.save(ao_path)
+
+        cita_path = None
+        if cita_file and cita_file.filename and cita_file.filename.lower().endswith(".pdf"):
+            cita_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_cita.pdf")
+            cita_file.save(cita_path)
+
+        cita_comp_path = None
+        if cita_comp_file and cita_comp_file.filename and cita_comp_file.filename.lower().endswith(".pdf"):
+            cita_comp_path = os.path.join(UPLOAD_FOLDER, f"{job_id}_cita_comp.pdf")
+            cita_comp_file.save(cita_comp_path)
+
+        logger.info(f"Scrutiny files uploaded: comp={comp_file.filename}, "
+                    f"intim={intim_file.filename}, ao={ao_file.filename}, "
+                    f"cita={cita_file.filename if cita_file else 'N/A'}, "
+                    f"cita_comp={cita_comp_file.filename if cita_comp_file else 'N/A'}")
 
     # Initialize job
     with _jobs_lock:
@@ -446,6 +563,9 @@ def download_scrutiny(job_id):
         return jsonify({"error": "Excel file not found."}), 404
 
     download_name = f"Order_Scrutiny_{job_id[:8]}.xlsx"
+
+    _open_file_natively(file_path)
+
     response = send_file(
         file_path,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -512,8 +632,8 @@ def _run_scrutiny(job_id: str):
 
 @app.route("/api/notice-reply/config")
 def notice_reply_config():
-    """Check if Gemini API key is configured for Notice Reply."""
-    has_key = bool(GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_api_key_here")
+    """Check if GCP Project ID is configured for Notice Reply."""
+    has_key = bool(GCP_PROJECT_ID and GCP_PROJECT_ID != "your_gcp_project_id_here")
     return jsonify({"configured": has_key})
 
 
@@ -524,9 +644,9 @@ def start_notice_reply():
     Expects multipart form with:
     - notice_pdf (required PDF)
     """
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
-        return jsonify({"error": "Gemini API key is not configured. "
-                        "Please set GEMINI_API_KEY in the .env file."}), 400
+    if not GCP_PROJECT_ID or GCP_PROJECT_ID == "your_gcp_project_id_here":
+        return jsonify({"error": "GCP Project ID is not configured. "
+                        "Please set GCP_PROJECT_ID in the .env file."}), 400
 
     # Validate file
     if "notice_pdf" not in request.files:
@@ -617,6 +737,8 @@ def download_notice_reply(job_id, file_format):
 
     if not file_path or not os.path.exists(file_path):
         return jsonify({"error": f"{file_format.upper()} file not found."}), 404
+
+    _open_file_natively(file_path)
 
     response = send_file(
         file_path,

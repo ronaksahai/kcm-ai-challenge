@@ -14,7 +14,7 @@ import PyPDF2
 from google import genai
 from google.genai import types
 
-from app.config import GEMINI_API_KEY, GEMINI_MODEL
+from app.config import GCP_PROJECT_ID, GCP_LOCATION, GEMINI_MODEL
 from app.services.notice_docx import generate_reply_docx
 from app.services.notice_excel import generate_details_excel
 
@@ -28,7 +28,7 @@ _client = None
 def _get_client():
     global _client
     if _client is None:
-        _client = genai.Client(api_key=GEMINI_API_KEY)
+        _client = genai.Client(vertexai=True, project=GCP_PROJECT_ID, location=GCP_LOCATION)
     return _client
 
 
@@ -100,16 +100,47 @@ NOTICE TEXT:
 
 def _analyze_notice(text: str) -> dict:
     """Send notice text to Gemini for structured analysis."""
+    import time
+    from google.genai import errors
     client = _get_client()
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=NOTICE_ANALYSIS_PROMPT + text,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.1,
-        ),
-    )
-    return json.loads(response.text)
+
+    models_to_try = [GEMINI_MODEL]
+    for fallback in ["gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash"]:
+        if fallback not in models_to_try:
+            models_to_try.append(fallback)
+
+    max_retries = 5
+
+    for model_name in models_to_try:
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=NOTICE_ANALYSIS_PROMPT + text,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.1,
+                    ),
+                )
+                return json.loads(response.text)
+            except errors.APIError as e:
+                if "503" in str(e) or getattr(e, 'code', None) == 503:
+                    if attempt < max_retries - 1:
+                        sleep_time = 2 ** attempt
+                        logger.warning(f"Model {model_name} overloaded (503). Retrying in {sleep_time}s...")
+                        time.sleep(sleep_time)
+                        continue
+                    else:
+                        logger.error(f"Model {model_name} overloaded (503). Exhausted retries.")
+                        break  # Fall back to next model
+                else:
+                    logger.error(f"API Error with model {model_name}: {e}")
+                    break  # Fall back on other API errors (like 404)
+            except Exception as e:
+                logger.error(f"Unexpected error with model {model_name}: {e}")
+                break
+
+    raise RuntimeError(f"Failed to generate content with Gemini API. Please try again later.")
 
 
 # ── Client Email Generator ───────────────────────────────────

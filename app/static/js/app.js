@@ -7,6 +7,35 @@
 document.addEventListener('DOMContentLoaded', () => {
     if (typeof lucide !== 'undefined') lucide.createIcons();
 
+    // Helper for robust pywebview downloads
+    async function downloadFile(url) {
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error("Download failed");
+            const disposition = response.headers.get('content-disposition');
+            let filename = "download";
+            if (disposition && disposition.indexOf('attachment') !== -1) {
+                const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+                if (matches != null && matches[1]) filename = matches[1].replace(/['"]/g, '');
+            }
+            const blob = await response.blob();
+            const blobUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = blobUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => {
+                window.URL.revokeObjectURL(blobUrl);
+                a.remove();
+            }, 100);
+        } catch (e) {
+            console.error("Download error:", e);
+            alert("Failed to download file.");
+        }
+    }
+
     // ── State ───────────────────────────────────────────────
     let selectedFile = null;
     let currentJobId = null;
@@ -172,8 +201,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    btnDownloadPdf.addEventListener('click', () => { if (currentJobId) window.location.href = `/api/translate/download/${currentJobId}/pdf`; });
-    btnDownloadRtf.addEventListener('click', () => { if (currentJobId) window.location.href = `/api/translate/download/${currentJobId}/rtf`; });
+    btnDownloadPdf.addEventListener('click', () => { if (currentJobId) downloadFile(`/api/translate/download/${currentJobId}/pdf`); });
+    btnDownloadRtf.addEventListener('click', () => { if (currentJobId) downloadFile(`/api/translate/download/${currentJobId}/rtf`); });
 
     btnPreviewToggle.addEventListener('click', async () => {
         if (previewArea.classList.contains('hidden')) {
@@ -353,7 +382,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Download Excel
     document.getElementById('btnDownloadExcel').addEventListener('click', () => {
-        if (scrutinyJobId) window.location.href = `/api/scrutiny/download/${scrutinyJobId}`;
+        if (scrutinyJobId) downloadFile(`/api/scrutiny/download/${scrutinyJobId}`);
     });
 
     // New scrutiny / retry
@@ -388,6 +417,242 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function showScrutinyError(msg) { scrutinyErrorMessage.textContent = msg; showScrutinySection('error'); }
+
+    // ── Bulk Upload Mode ─────────────────────────────────────
+
+    const modeIndividual = document.getElementById('modeIndividual');
+    const modeBulk = document.getElementById('modeBulk');
+    const individualUploadMode = document.getElementById('individualUploadMode');
+    const bulkUploadMode = document.getElementById('bulkUploadMode');
+    const bulkDropzone = document.getElementById('bulkDropzone');
+    const bulkFileInput = document.getElementById('bulkFileInput');
+    const bulkClassifying = document.getElementById('bulkClassifying');
+    const bulkReview = document.getElementById('bulkReview');
+    const bulkReviewBody = document.getElementById('bulkReviewBody');
+    const bulkValidation = document.getElementById('bulkValidation');
+    const btnBulkGenerate = document.getElementById('btnBulkGenerate');
+    const btnBulkReset = document.getElementById('btnBulkReset');
+    const bulkIntimPassword = document.getElementById('bulkIntimPassword');
+
+    let bulkClassifiedFiles = []; // Array of {filename, saved_path, type, label, confidence, date}
+
+    // Mode toggle
+    [modeIndividual, modeBulk].forEach(btn => {
+        btn.addEventListener('click', () => {
+            const mode = btn.dataset.mode;
+            modeIndividual.classList.toggle('active', mode === 'individual');
+            modeBulk.classList.toggle('active', mode === 'bulk');
+            individualUploadMode.classList.toggle('hidden', mode === 'bulk');
+            bulkUploadMode.classList.toggle('hidden', mode === 'individual');
+            if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 50);
+        });
+    });
+
+    // Bulk drop zone events
+    bulkDropzone.addEventListener('click', () => bulkFileInput.click());
+    bulkFileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) handleBulkFiles(e.target.files);
+    });
+    bulkDropzone.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); bulkDropzone.classList.add('drag-over'); });
+    bulkDropzone.addEventListener('dragleave', (e) => { e.preventDefault(); e.stopPropagation(); bulkDropzone.classList.remove('drag-over'); });
+    bulkDropzone.addEventListener('drop', (e) => {
+        e.preventDefault(); e.stopPropagation(); bulkDropzone.classList.remove('drag-over');
+        if (e.dataTransfer.files.length > 0) handleBulkFiles(e.dataTransfer.files);
+    });
+
+    async function handleBulkFiles(fileList) {
+        const pdfFiles = Array.from(fileList).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+        if (pdfFiles.length === 0) { alert('No PDF files found. Please select PDF documents.'); return; }
+
+        // Show classifying state
+        bulkDropzone.classList.add('hidden');
+        bulkClassifying.classList.remove('hidden');
+        bulkReview.classList.add('hidden');
+
+        // Upload files for classification
+        const formData = new FormData();
+        pdfFiles.forEach(f => formData.append('files', f));
+
+        try {
+            const resp = await fetch('/api/scrutiny/classify', { method: 'POST', body: formData });
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || 'Classification failed.');
+
+            bulkClassifiedFiles = data.files;
+            renderBulkReview();
+        } catch (err) {
+            alert('Classification error: ' + err.message);
+            resetBulkUpload();
+        }
+    }
+
+    const DOC_TYPE_OPTIONS = [
+        { value: '', label: '— Skip (not needed) —' },
+        { value: 'computation_sheet', label: 'Computation Sheet' },
+        { value: 'intimation_order', label: 'Intimation Order / ITR' },
+        { value: 'assessment_order', label: 'Assessment Order' },
+        { value: 'cita_order', label: 'CIT(A) Order u/s 250' },
+        { value: 'cita_comp_sheet', label: 'CIT(A) Computation Sheet' },
+    ];
+
+    function renderBulkReview() {
+        bulkClassifying.classList.add('hidden');
+        bulkReview.classList.remove('hidden');
+        bulkReviewBody.innerHTML = '';
+
+        bulkClassifiedFiles.forEach((f, idx) => {
+            const tr = document.createElement('tr');
+
+            // Filename
+            const tdName = document.createElement('td');
+            tdName.classList.add('bulk-filename');
+            tdName.textContent = f.filename;
+            tdName.title = f.filename;
+            tr.appendChild(tdName);
+
+            // Type dropdown
+            const tdType = document.createElement('td');
+            const select = document.createElement('select');
+            select.classList.add('bulk-type-select');
+            select.dataset.idx = idx;
+            DOC_TYPE_OPTIONS.forEach(opt => {
+                const option = document.createElement('option');
+                option.value = opt.value;
+                option.textContent = opt.label;
+                if (opt.value === (f.type || '')) option.selected = true;
+                select.appendChild(option);
+            });
+            select.addEventListener('change', (e) => {
+                bulkClassifiedFiles[idx].type = e.target.value || null;
+                bulkClassifiedFiles[idx].label = e.target.value
+                    ? DOC_TYPE_OPTIONS.find(o => o.value === e.target.value)?.label || ''
+                    : 'Skipped';
+                validateBulkAssignments();
+            });
+            tdType.appendChild(select);
+            tr.appendChild(tdType);
+
+            // Confidence badge
+            const tdConf = document.createElement('td');
+            const badge = document.createElement('span');
+            badge.classList.add('confidence-badge', `confidence-${f.confidence}`);
+            const confLabels = { high: '✓ Auto', medium: '~ AI', low: '? Guess', none: '✗ Unknown' };
+            badge.textContent = confLabels[f.confidence] || f.confidence;
+            tdConf.appendChild(badge);
+            tr.appendChild(tdConf);
+
+            // Date
+            const tdDate = document.createElement('td');
+            tdDate.classList.add('bulk-date');
+            tdDate.textContent = f.date || '—';
+            tr.appendChild(tdDate);
+
+            // Remove button
+            const tdRemove = document.createElement('td');
+            const removeBtn = document.createElement('button');
+            removeBtn.classList.add('suc-remove');
+            removeBtn.title = 'Remove file';
+            removeBtn.innerHTML = '<i data-lucide="x"></i>';
+            removeBtn.addEventListener('click', () => {
+                bulkClassifiedFiles.splice(idx, 1);
+                if (bulkClassifiedFiles.length === 0) {
+                    resetBulkUpload();
+                } else {
+                    renderBulkReview();
+                }
+            });
+            tdRemove.appendChild(removeBtn);
+            tr.appendChild(tdRemove);
+
+            bulkReviewBody.appendChild(tr);
+        });
+
+        if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 50);
+        validateBulkAssignments();
+    }
+
+    function validateBulkAssignments() {
+        const types = bulkClassifiedFiles.map(f => f.type).filter(Boolean);
+        const missing = [];
+        if (!types.includes('computation_sheet')) missing.push('Computation Sheet');
+        if (!types.includes('intimation_order')) missing.push('Intimation Order / ITR');
+        if (!types.includes('assessment_order')) missing.push('Assessment Order');
+
+        // Check for duplicates
+        const dupes = [];
+        const typeCounts = {};
+        types.forEach(t => { typeCounts[t] = (typeCounts[t] || 0) + 1; });
+        Object.entries(typeCounts).forEach(([t, count]) => {
+            if (count > 1) {
+                const label = DOC_TYPE_OPTIONS.find(o => o.value === t)?.label || t;
+                dupes.push(label);
+            }
+        });
+
+        let html = '';
+        if (missing.length > 0) {
+            html += `<div class="validation-warning"><i data-lucide="alert-circle"></i> Missing required: <strong>${missing.join(', ')}</strong></div>`;
+        }
+        if (dupes.length > 0) {
+            html += `<div class="validation-warning"><i data-lucide="alert-triangle"></i> Duplicate type: <strong>${dupes.join(', ')}</strong> — please reassign one</div>`;
+        }
+        if (missing.length === 0 && dupes.length === 0) {
+            html = `<div class="validation-ok"><i data-lucide="check-circle-2"></i> All required documents identified</div>`;
+        }
+        bulkValidation.innerHTML = html;
+        if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 50);
+
+        btnBulkGenerate.disabled = missing.length > 0 || dupes.length > 0;
+    }
+
+    function resetBulkUpload() {
+        bulkClassifiedFiles = [];
+        bulkFileInput.value = '';
+        bulkDropzone.classList.remove('hidden');
+        bulkClassifying.classList.add('hidden');
+        bulkReview.classList.add('hidden');
+        bulkReviewBody.innerHTML = '';
+        bulkValidation.innerHTML = '';
+        bulkIntimPassword.value = '';
+        btnBulkGenerate.disabled = true;
+        if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 50);
+    }
+
+    btnBulkReset.addEventListener('click', resetBulkUpload);
+
+    // Bulk Generate
+    btnBulkGenerate.addEventListener('click', async () => {
+        const assignments = bulkClassifiedFiles
+            .filter(f => f.type)
+            .map(f => ({ saved_path: f.saved_path, type: f.type }));
+
+        const formData = new FormData();
+        formData.append('mode', 'bulk');
+        formData.append('assignments', JSON.stringify(assignments));
+        formData.append('intimation_password', bulkIntimPassword.value.trim());
+
+        showScrutinySection('progress');
+        updateScrutinyProgress('uploading', 'Starting Order Scrutiny…', 0);
+
+        try {
+            const resp = await fetch('/api/scrutiny', { method: 'POST', body: formData });
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || 'Failed to start scrutiny.');
+            scrutinyJobId = data.job_id;
+            startScrutinyPolling();
+        } catch (err) { showScrutinyError(err.message); }
+    });
+
+    // Override resetScrutiny to also reset bulk state
+    const _origResetScrutiny = resetScrutiny;
+    function resetScrutinyFull() {
+        _origResetScrutiny();
+        resetBulkUpload();
+    }
+    document.getElementById('btnNewScrutiny').removeEventListener('click', resetScrutiny);
+    document.getElementById('btnScrutinyRetry').removeEventListener('click', resetScrutiny);
+    document.getElementById('btnNewScrutiny').addEventListener('click', resetScrutinyFull);
+    document.getElementById('btnScrutinyRetry').addEventListener('click', resetScrutinyFull);
 
 
     // ═════════════════════════════════════════════════════════
@@ -502,10 +767,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     document.getElementById('btnDownloadReplyDocx').addEventListener('click', () => {
-        if (noticeJobId) window.location.href = `/api/notice-reply/download/${noticeJobId}/docx`;
+        if (noticeJobId) downloadFile(`/api/notice-reply/download/${noticeJobId}/docx`);
     });
     document.getElementById('btnDownloadDetailsXlsx').addEventListener('click', () => {
-        if (noticeJobId) window.location.href = `/api/notice-reply/download/${noticeJobId}/xlsx`;
+        if (noticeJobId) downloadFile(`/api/notice-reply/download/${noticeJobId}/xlsx`);
     });
 
     // Email toggle & copy

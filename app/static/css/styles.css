@@ -13,6 +13,10 @@
     box-sizing: border-box;
 }
 
+.hidden {
+    display: none !important;
+}
+
 :root {
     /* Background layers */
     --bg-deepest: #06060b;
@@ -1434,7 +1438,316 @@ body {
     background: linear-gradient(135deg, #34d399, #10b981);
 }
 
-/* ── Notice Reply: Email Preview ─────────────────────────── */
+/* ── Scrutiny: Mode Toggle ───────────────────────────────── */
+.scrutiny-mode-toggle {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 24px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    padding: 4px;
+    width: fit-content;
+}
+
+.mode-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.25s var(--ease-out);
+}
+
+.mode-pill i {
+    width: 16px;
+    height: 16px;
+}
+
+.mode-pill:hover {
+    color: var(--text-secondary);
+}
+
+.mode-pill.active {
+    background: var(--accent-gradient);
+    color: #000;
+    font-weight: 600;
+    box-shadow: 0 2px 12px rgba(245, 158, 11, 0.2);
+}
+
+.mode-pill.active i {
+    color: #000;
+}
+
+/* ── Scrutiny: Bulk Drop Zone ────────────────────────────── */
+.bulk-dropzone {
+    border: 2px dashed var(--glass-border);
+    border-radius: var(--radius-xl);
+    padding: 56px 40px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s var(--ease-out);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+}
+
+.bulk-dropzone:hover {
+    border-color: var(--accent-500);
+    background: rgba(245, 158, 11, 0.02);
+}
+
+.bulk-dropzone.drag-over {
+    border-color: var(--accent-400);
+    background: rgba(245, 158, 11, 0.06);
+    transform: scale(1.01);
+}
+
+.bulk-dropzone.hidden {
+    display: none;
+}
+
+/* ── Scrutiny: Classifying Spinner ────────────────────────── */
+.bulk-classifying {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 48px;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xl);
+    backdrop-filter: blur(10px);
+}
+
+.bulk-classifying span {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.bulk-classifying.hidden {
+    display: none;
+}
+
+/* ── Scrutiny: Review Table ──────────────────────────────── */
+.bulk-review {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xl);
+    padding: 28px;
+    backdrop-filter: blur(10px);
+}
+
+.bulk-review.hidden {
+    display: none;
+}
+
+.bulk-review-header {
+    margin-bottom: 20px;
+}
+
+.bulk-review-header h4 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.bulk-review-header h4 i {
+    width: 20px;
+    height: 20px;
+    color: var(--accent-400);
+}
+
+.bulk-review-header p {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.bulk-review-table-wrapper {
+    overflow-x: auto;
+    margin-bottom: 20px;
+}
+
+.bulk-review-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.bulk-review-table thead th {
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--glass-border);
+    white-space: nowrap;
+}
+
+.bulk-review-table tbody tr {
+    transition: background 0.15s;
+}
+
+.bulk-review-table tbody tr:hover {
+    background: var(--glass-hover);
+}
+
+.bulk-review-table tbody td {
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    vertical-align: middle;
+}
+
+.bulk-filename {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.bulk-date {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+/* Type dropdown */
+.bulk-type-select {
+    width: 100%;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--glass-border);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.2s;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+    min-width: 190px;
+}
+
+.bulk-type-select:focus {
+    border-color: var(--accent-500);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.bulk-type-select option {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+}
+
+/* Confidence badges */
+.confidence-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.confidence-high {
+    background: rgba(16, 185, 129, 0.12);
+    color: #34d399;
+    border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.confidence-medium {
+    background: rgba(59, 130, 246, 0.12);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.confidence-low {
+    background: rgba(245, 158, 11, 0.12);
+    color: var(--accent-400);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.confidence-none {
+    background: rgba(239, 68, 68, 0.1);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+/* Validation messages */
+.bulk-validation {
+    margin-bottom: 16px;
+}
+
+.validation-warning {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: rgba(245, 158, 11, 0.06);
+    border: 1px solid rgba(245, 158, 11, 0.15);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--accent-400);
+    margin-bottom: 8px;
+}
+
+.validation-warning i {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+}
+
+.validation-ok {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: rgba(16, 185, 129, 0.06);
+    border: 1px solid rgba(16, 185, 129, 0.15);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--success);
+}
+
+.validation-ok i {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+}
+
+/* Bulk password group */
+.bulk-password-group {
+    margin-top: 0;
+    margin-bottom: 20px;
+}
+
+/* Scrutiny action bar with multiple buttons */
+.scrutiny-action-bar {
+    gap: 12px;
+}
 .email-preview-area {
     width: 100%;
     margin-top: 16px;

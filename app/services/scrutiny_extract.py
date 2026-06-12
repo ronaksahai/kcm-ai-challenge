@@ -12,7 +12,7 @@ import pdfplumber
 from google import genai
 from google.genai import types
 
-from app.config import GEMINI_API_KEY, GEMINI_MODEL
+from app.config import GCP_PROJECT_ID, GCP_LOCATION, GEMINI_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -23,69 +23,64 @@ _client = None
 def _get_client():
     global _client
     if _client is None:
-        _client = genai.Client(api_key=GEMINI_API_KEY)
+        _client = genai.Client(vertexai=True, project=GCP_PROJECT_ID, location=GCP_LOCATION)
     return _client
 
 
 def _ask_gemini(prompt: str, pdf_path: str = None) -> dict:
     """Send prompt to Gemini and parse JSON response, with retry and fallback.
-    If pdf_path is provided, uploads the PDF natively (useful for scanned/image PDFs).
+    If pdf_path is provided, sends the PDF as inline bytes (works with Vertex AI).
     """
     import time
     from google.genai import errors, types
     client = _get_client()
     
     models_to_try = [GEMINI_MODEL]
-    if GEMINI_MODEL != "gemini-2.5-flash":
-        models_to_try.append("gemini-2.5-flash")
+    for fallback in ["gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash"]:
+        if fallback not in models_to_try:
+            models_to_try.append(fallback)
 
-    max_retries = 3
-    uploaded_file = None
+    max_retries = 5
     
-    try:
-        if pdf_path:
-            logger.info("Uploading PDF natively to Gemini...")
-            uploaded_file = client.files.upload(file=pdf_path)
-            contents = [prompt, uploaded_file]
-        else:
-            contents = prompt
+    if pdf_path:
+        logger.info("Sending PDF as inline bytes to Gemini...")
+        with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+        pdf_part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
+        contents = [prompt, pdf_part]
+    else:
+        contents = prompt
 
-        for model_name in models_to_try:
-            for attempt in range(max_retries):
-                try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=contents,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            temperature=0.1,
-                        ),
-                    )
-                    return json.loads(response.text)
-                except errors.APIError as e:
-                    if "503" in str(e) or getattr(e, 'code', None) == 503:
-                        if attempt < max_retries - 1:
-                            sleep_time = 2 ** attempt
-                            logger.warning(f"Model {model_name} overloaded (503). Retrying in {sleep_time}s...")
-                            time.sleep(sleep_time)
-                            continue
-                        else:
-                            logger.error(f"Model {model_name} overloaded (503). Exhausted retries.")
-                            break  # Fall back to next model
-                    else:
-                        logger.error(f"API Error with model {model_name}: {e}")
-                        break  # Fall back on other API errors (like 404)
-                except Exception as e:
-                    logger.error(f"Unexpected error with model {model_name}: {e}")
-                    break
-                    
-        raise RuntimeError(f"Failed to generate content with Gemini API. Please try again later.")
-    finally:
-        if uploaded_file:
+    for model_name in models_to_try:
+        for attempt in range(max_retries):
             try:
-                client.files.delete(name=uploaded_file.name)
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.1,
+                    ),
+                )
+                return json.loads(response.text)
+            except errors.APIError as e:
+                if "503" in str(e) or getattr(e, 'code', None) == 503:
+                    if attempt < max_retries - 1:
+                        sleep_time = 2 ** attempt
+                        logger.warning(f"Model {model_name} overloaded (503). Retrying in {sleep_time}s...")
+                        time.sleep(sleep_time)
+                        continue
+                    else:
+                        logger.error(f"Model {model_name} overloaded (503). Exhausted retries.")
+                        break  # Fall back to next model
+                else:
+                    logger.error(f"API Error with model {model_name}: {e}")
+                    break  # Fall back on other API errors (like 404)
             except Exception as e:
-                logger.error(f"Failed to clean up uploaded file: {e}")
+                logger.error(f"Unexpected error with model {model_name}: {e}")
+                break
+                    
+    raise RuntimeError(f"Failed to generate content with Gemini API. Please try again later.")
 
 
 # ── PDF Text Extraction ─────────────────────────────────────
@@ -900,7 +895,12 @@ Return a JSON object with:
   "total_additions_by_ao": number (sum of all addition_amount),
   "assessed_income_after_cita": number (if determinable from the order),
   "income_115jb": number (Net Book profit u/s 115JB after CIT(A) relief, if determinable),
-  "regular_tax": number (Regular Assessment Tax paid, usually mentioned in prepaid taxes in the OGE, if determinable)
+  "regular_tax": number (Regular Assessment Tax paid, usually mentioned in prepaid taxes in the OGE, if determinable),
+  "interest_234a": number (Interest u/s 234A after CIT(A) relief, if determinable),
+  "interest_234b": number (Interest u/s 234B after CIT(A) relief, if determinable),
+  "interest_234c": number (Interest u/s 234C after CIT(A) relief, if determinable),
+  "interest_234d": number (Interest u/s 234D after CIT(A) relief, if determinable),
+  "fee_234f": number (Fee u/s 234F after CIT(A) relief, if determinable)
 }
 
 Instructions:
