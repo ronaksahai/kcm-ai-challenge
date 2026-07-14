@@ -390,13 +390,43 @@ def _build_table(rows: list, styles: dict):
 
 
 def _apply_inline_formatting(text: str) -> str:
-    """Convert markdown inline formatting to ReportLab XML tags."""
+    """Convert markdown inline formatting to ReportLab XML tags.
+
+    Order matters: bold-italic (*** / ___) must be matched before
+    bold (** / __) and italic (* / _) to avoid producing misnested
+    tags like ``<b><i></b></i>`` that crash ReportLab's XML parser.
+    """
+    # Bold-italic: ***text*** or ___text___
+    text = re.sub(r"\*\*\*(.+?)\*\*\*", r"<b><i>\1</i></b>", text)
+    text = re.sub(r"___(.+?)___", r"<b><i>\1</i></b>", text)
     # Bold: **text** or __text__
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"__(.+?)__", r"<b>\1</b>", text)
     # Italic: *text* or _text_
     text = re.sub(r"\*(.+?)\*", r"<i>\1</i>", text)
     text = re.sub(r"_(.+?)_", r"<i>\1</i>", text)
+    # Sanitize: remove empty tag pairs and fix any remaining misnesting
+    text = _sanitize_reportlab_tags(text)
+    return text
+
+
+def _sanitize_reportlab_tags(text: str) -> str:
+    """Remove empty inline tag pairs and fix misnested b/i tags.
+
+    ReportLab's Paragraph parser requires strictly nested XML.  OCR
+    output and aggressive regex substitutions can produce artefacts
+    like ``<b></b>``, ``<i></i>``, or ``<b><i></b></i>``.  This
+    function cleans them up so the parser never sees them.
+    """
+    # 1. Strip empty tag pairs (possibly with only whitespace inside)
+    for _ in range(3):  # iterate to catch nested empties
+        text = re.sub(r"<(b|i)>\s*</\1>", "", text)
+
+    # 2. Fix overlapping tags: <b><i></b></i> → <b><i></i></b>
+    #    and <i><b></i></b> → <i><b></b></i>
+    text = re.sub(r"<b><i>(.*?)</b></i>", r"<b><i>\1</i></b>", text)
+    text = re.sub(r"<i><b>(.*?)</i></b>", r"<i><b>\1</b></i>", text)
+
     return text
 
 

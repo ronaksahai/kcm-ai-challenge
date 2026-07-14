@@ -117,7 +117,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const progressPct = document.getElementById('progressPct');
     const progressTitle = document.getElementById('progressTitle');
     const progressDetail = document.getElementById('progressDetail');
-    const btnDownloadPdf = document.getElementById('btnDownloadPdf');
+
     const btnDownloadRtf = document.getElementById('btnDownloadRtf');
     const btnPreviewToggle = document.getElementById('btnPreviewToggle');
     const previewArea = document.getElementById('previewArea');
@@ -201,7 +201,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    btnDownloadPdf.addEventListener('click', () => { if (currentJobId) downloadFile(`/api/translate/download/${currentJobId}/pdf`); });
+
     btnDownloadRtf.addEventListener('click', () => { if (currentJobId) downloadFile(`/api/translate/download/${currentJobId}/rtf`); });
 
     btnPreviewToggle.addEventListener('click', async () => {

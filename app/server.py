@@ -44,7 +44,7 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE_MB * 1024 * 1024
 
 # ── Job Tracking ─────────────────────────────────────────────
 # In-memory store for translation jobs.
-# Structure: {job_id: {status, stage, detail, progress, error, output_pdf, output_rtf, ...}}
+# Structure: {job_id: {status, stage, detail, progress, error, output_rtf, ...}}
 _jobs = {}
 _jobs_lock = threading.Lock()
 
@@ -114,7 +114,7 @@ def start_translation():
             "error": None,
             "original_filename": original_filename,
             "upload_path": upload_path,
-            "output_pdf": None,
+
             "output_rtf": None,
             "extracted_text": None,
             "translated_text": None,
@@ -148,7 +148,7 @@ def translation_status(job_id):
         "detail": job["detail"],
         "progress": round(job["progress"] * 100, 1),
         "error": job["error"],
-        "has_pdf": job["output_pdf"] is not None,
+
         "has_rtf": job["output_rtf"] is not None,
     })
 
@@ -178,14 +178,11 @@ def download_translation(job_id, file_format):
     if job["status"] != "completed":
         return jsonify({"error": "Job is not yet complete."}), 400
 
-    if file_format == "pdf":
-        file_path = job.get("output_pdf")
-        mimetype = "application/pdf"
-    elif file_format == "rtf":
+    if file_format == "rtf":
         file_path = job.get("output_rtf")
         mimetype = "application/rtf"
     else:
-        return jsonify({"error": "Invalid format. Use 'pdf' or 'rtf'."}), 400
+        return jsonify({"error": "Invalid format. Use 'rtf'."}), 400
 
     if not file_path or not os.path.exists(file_path):
         return jsonify({"error": f"{file_format.upper()} file not found."}), 404
@@ -268,18 +265,9 @@ def _run_pipeline(job_id: str):
             _jobs[job_id]["translated_text"] = translated_text
 
         # ── Stage 3: Generate output files ───────────────────
-        _update_job(job_id, stage="generating", detail="Generating PDF…", progress=0.82)
+        _update_job(job_id, stage="generating", detail="Generating RTF…", progress=0.82)
 
-        from app.services.pdf_service import generate_pdf
         from app.services.rtf_service import generate_rtf
-
-        # Generate PDF
-        pdf_path = os.path.join(OUTPUT_DIR, f"{job_id}_{base_name}_translated.pdf")
-        generate_pdf(translated_text, pdf_path, original_filename)
-        with _jobs_lock:
-            _jobs[job_id]["output_pdf"] = pdf_path
-
-        _update_job(job_id, stage="generating", detail="Generating RTF…", progress=0.90)
 
         # Generate RTF
         rtf_path = os.path.join(OUTPUT_DIR, f"{job_id}_{base_name}_translated.rtf")

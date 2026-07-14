@@ -7,6 +7,7 @@ Handles text chunking and markdown-aware Gujarati-to-English translation.
 import re
 import time
 import logging
+import threading
 import requests
 
 from app.config import (
@@ -22,6 +23,35 @@ logger = logging.getLogger(__name__)
 
 # Source language is always Gujarati for this module
 SOURCE_LANGUAGE = "gu-IN"
+
+# ── Rate Limiter ─────────────────────────────────────────────
+# Sarvam Starter tier allows 60 req/min. We cap at 50 to stay safe.
+_RATE_LIMIT_RPM = 50
+_rate_lock = threading.Lock()
+_request_timestamps: list[float] = []
+
+
+def _wait_for_rate_limit():
+    """
+    Thread-safe sliding-window rate limiter.
+    Blocks the calling thread until a request slot is available.
+    Shared across all translation jobs so concurrent threads
+    collectively stay under the Sarvam API rate limit.
+    """
+    window = 60.0  # 1-minute sliding window
+    while True:
+        with _rate_lock:
+            now = time.monotonic()
+            # Prune timestamps older than the window
+            while _request_timestamps and _request_timestamps[0] <= now - window:
+                _request_timestamps.pop(0)
+            if len(_request_timestamps) < _RATE_LIMIT_RPM:
+                _request_timestamps.append(now)
+                return  # Slot acquired
+            # Calculate how long to wait for the oldest entry to expire
+            wait_time = _request_timestamps[0] - (now - window) + 0.05
+        logger.debug(f"Rate limit reached ({_RATE_LIMIT_RPM}/min), waiting {wait_time:.1f}s…")
+        time.sleep(wait_time)
 
 
 # ── Public API ───────────────────────────────────────────────
@@ -75,7 +105,6 @@ def translate_markdown(
         for chunk in chunks:
             translated_chunk = _call_translate_api(chunk)
             translated_parts.append(translated_chunk)
-            time.sleep(0.1)  # Small delay to respect rate limits
 
         translated_text = " ".join(translated_parts)
         translated_segments.append(f"{prefix}{translated_text}")
@@ -225,8 +254,17 @@ def _chunk_text(text: str, limit: int) -> list:
     return chunks
 
 
+# Retry config for 429 / 5xx errors
+_MAX_RETRIES = 5
+_INITIAL_BACKOFF = 2.0  # seconds
+
+
 def _call_translate_api(text: str) -> str:
-    """Call the Sarvam Translate API for a single text chunk."""
+    """
+    Call the Sarvam Translate API for a single text chunk.
+    Uses the global rate limiter and retries with exponential
+    backoff on 429 (rate-limit) and 5xx (server) errors.
+    """
     if not text.strip():
         return text
 
@@ -242,19 +280,57 @@ def _call_translate_api(text: str) -> str:
         "Content-Type": "application/json",
     }
 
-    try:
-        resp = requests.post(
-            SARVAM_TRANSLATE_URL,
-            json=payload,
-            headers=headers,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        result = resp.json()
-        return result.get("translated_text", text)
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"Translation API error: {e} — Response: {e.response.text}")
-        raise
-    except Exception as e:
-        logger.error(f"Translation failed: {e}")
-        raise
+    last_exception = None
+    for attempt in range(_MAX_RETRIES):
+        # Wait for a slot from the global rate limiter
+        _wait_for_rate_limit()
+
+        try:
+            resp = requests.post(
+                SARVAM_TRANSLATE_URL,
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            return result.get("translated_text", text)
+
+        except requests.exceptions.HTTPError as e:
+            last_exception = e
+            status = e.response.status_code if e.response is not None else 0
+
+            if status == 429 or status >= 500:
+                backoff = _INITIAL_BACKOFF * (2 ** attempt)
+                logger.warning(
+                    f"Translate API returned {status} (attempt {attempt + 1}/{_MAX_RETRIES}). "
+                    f"Retrying in {backoff:.1f}s…"
+                )
+                time.sleep(backoff)
+                continue
+
+            # Non-retryable HTTP error (4xx other than 429)
+            logger.error(f"Translation API error: {e} — Response: {e.response.text}")
+            raise
+
+        except requests.exceptions.ConnectionError as e:
+            last_exception = e
+            backoff = _INITIAL_BACKOFF * (2 ** attempt)
+            logger.warning(
+                f"Connection error (attempt {attempt + 1}/{_MAX_RETRIES}). "
+                f"Retrying in {backoff:.1f}s…"
+            )
+            time.sleep(backoff)
+            continue
+
+        except Exception as e:
+            logger.error(f"Translation failed: {e}")
+            raise
+
+    # All retries exhausted
+    logger.error(
+        f"Translation failed after {_MAX_RETRIES} retries. Last error: {last_exception}"
+    )
+    if last_exception is not None:
+        raise last_exception
+    raise RuntimeError(f"Translation failed after {_MAX_RETRIES} retries")

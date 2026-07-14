@@ -55,7 +55,8 @@ Automatically draft reply skeletons for Income Tax Department notices and genera
 ### Prerequisites
 - Python 3.10 or higher
 - A Sarvam AI API key ([Get one here](https://dashboard.sarvam.ai/))
-- A Google Gemini API key ([Get one here](https://aistudio.google.com/))
+- A Google Cloud Platform (GCP) Project with Vertex AI API enabled
+- A GCP Service Account JSON key (or use Application Default Credentials)
 
 ### Setup
 
@@ -72,9 +73,12 @@ venv\Scripts\activate        # Windows
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Configure your API keys
-#    Open .env and set your SARVAM_API_KEY and GEMINI_API_KEY
+# 4. Configure your API keys and GCP settings
+#    Open .env and set SARVAM_API_KEY, GCP_PROJECT_ID, and GCP_LOCATION
 notepad .env
+
+# 5. Set up Google Cloud Authentication (if using a service account key file)
+export GOOGLE_APPLICATION_CREDENTIALS="path/to/your/service_account.json"
 ```
 
 ### Run the App
@@ -122,9 +126,11 @@ kcm-ai-challenge/
 | Variable | Description |
 |----------|-------------|
 | `SARVAM_API_KEY` | Your Sarvam AI API subscription key *(required for translation)* |
-| `GEMINI_API_KEY` | Your Google Gemini API key *(required for scrutiny and notice reply)* |
+| `GCP_PROJECT_ID` | Your Google Cloud Project ID *(required for Vertex AI)* |
+| `GCP_LOCATION` | Your Google Cloud location (e.g., `us-central1`) |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to your GCP service account JSON key |
 
-Edit the `.env` file in the project root to set your API keys.
+Edit the `.env` file in the project root to set your configuration.
 
 ---
 
