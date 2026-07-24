@@ -54,6 +54,11 @@
                     <span>Notice Reply</span>
                     <div class="nav-active-indicator"></div>
                 </a>
+                <a href="#" class="nav-item" id="nav-caselaw" data-module="caselaw">
+                    <i data-lucide="scale"></i>
+                    <span>Case Law Finder</span>
+                    <div class="nav-active-indicator"></div>
+                </a>
             </nav>
 
             <div class="sidebar-footer">
@@ -87,7 +92,7 @@
                     <div class="header-right">
                         <div class="powered-by">
                             <span>Powered by</span>
-                            <strong>Sarvam AI</strong>
+                            <strong>Gemini 3.6 Flash</strong>
                         </div>
                     </div>
                 </header>
@@ -174,11 +179,6 @@
                                     <span>Upload</span>
                                 </div>
                                 <div class="stage-connector"></div>
-                                <div class="stage" id="stageExtract" data-stage="extracting">
-                                    <div class="stage-icon"><i data-lucide="scan-eye"></i></div>
-                                    <span>OCR Extract</span>
-                                </div>
-                                <div class="stage-connector"></div>
                                 <div class="stage" id="stageTranslate" data-stage="translating">
                                     <div class="stage-icon"><i data-lucide="languages"></i></div>
                                     <span>Translate</span>
@@ -203,15 +203,18 @@
                                 </div>
                             </div>
                             <h3>Translation Complete!</h3>
-                            <p class="completed-subtitle">Your documents are ready for download</p>
+                            <p class="completed-subtitle">Your documents are ready for review and printing</p>
 
-                            <div class="download-buttons">
-
-                                <button class="btn-download btn-rtf" id="btnDownloadRtf">
-                                    <i data-lucide="file-type"></i>
+                            <div class="download-buttons" style="display: flex; gap: 12px; align-items: center; justify-content: center; margin-top: 16px;">
+                                <select id="printOrientation" style="background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--glass-border); border-radius: var(--radius-md); padding: 8px 12px; font-family: inherit; font-size: 14px; outline: none; cursor: pointer;">
+                                    <option value="portrait">Portrait</option>
+                                    <option value="landscape">Landscape</option>
+                                </select>
+                                <button class="btn-download btn-print" id="btnPrintTranslation" style="margin-top: 0;">
+                                    <i data-lucide="printer"></i>
                                     <div class="btn-download-text">
-                                        <span class="btn-download-label">Download</span>
-                                        <span class="btn-download-format">RTF Document</span>
+                                        <span class="btn-download-label">Print / Save as PDF</span>
+                                        <span class="btn-download-format">Document</span>
                                     </div>
                                 </button>
                             </div>
@@ -751,10 +754,138 @@
                 </div>
             </div>
 
+            <!-- ═══════════════════════════════════════════════
+                 MODULE: Case Law Finder
+                 ═══════════════════════════════════════════════ -->
+            <div id="caselawModule" class="module-content">
+
+                <!-- Header -->
+                <header class="content-header">
+                    <div class="header-left">
+                        <h1>
+                            <i data-lucide="scale" class="header-icon"></i>
+                            Case Law Finder
+                        </h1>
+                        <p class="header-desc">
+                            Find precedents with matching facts for your tax scenario
+                        </p>
+                    </div>
+                    <div class="header-right">
+                        <div class="powered-by">
+                            <span>Powered by</span>
+                            <strong>Gemini AI + Google Search</strong>
+                        </div>
+                    </div>
+                </header>
+
+                <div class="content-body">
+
+                    <!-- ─── Search Form ─────────────────────────── -->
+                    <section class="section" id="caselawSearchSection">
+                        <div class="caselaw-search-form">
+                            <label for="caselawScenario" class="form-label">Describe your tax scenario</label>
+                            <textarea
+                                id="caselawScenario"
+                                class="caselaw-textarea"
+                                rows="5"
+                                placeholder="e.g., Disallowance of employee PF contribution deposited after due date but before ITR filing date u/s 36(1)(va) read with section 2(24)(x) for AY 2020-21."></textarea>
+
+                            <!-- File Attachment Area -->
+                            <div class="caselaw-attach-area">
+                                <label class="form-label">Attach files for context <span class="optional-tag">(optional)</span></label>
+                                <div class="caselaw-attach-zone" id="caselawAttachZone">
+                                    <i data-lucide="paperclip" style="width:18px;height:18px;"></i>
+                                    <span>Drop files here or <strong>click to browse</strong></span>
+                                    <span class="attach-formats">PDF, Word, Excel, JPG/PNG</span>
+                                    <input type="file" id="caselawFileInput" multiple accept=".pdf,.docx,.doc,.xlsx,.xls,.jpg,.jpeg,.png" hidden>
+                                </div>
+                                <div class="caselaw-attached-files" id="caselawAttachedFiles">
+                                    <!-- Attached file chips rendered by JS -->
+                                </div>
+                            </div>
+
+                            <div class="caselaw-controls">
+                                <div class="caselaw-filter-group">
+                                    <label for="caselawCourtFilter" class="filter-label">Court</label>
+                                    <select id="caselawCourtFilter" class="caselaw-select">
+                                        <option value="all">All Courts</option>
+                                        <option value="supreme_court">Supreme Court</option>
+                                        <option value="high_court">High Courts</option>
+                                        <option value="itat">ITAT</option>
+                                    </select>
+                                </div>
+
+                                <button class="btn-primary btn-action" id="btnSearchCaselaw">
+                                    <i data-lucide="search"></i>
+                                    <span>Find Precedents</span>
+                                </button>
+                            </div>
+
+                            <p class="caselaw-hint">
+                                <i data-lucide="info" style="width:14px;height:14px;"></i>
+                                Be specific — mention the section, sub-section, nature of disallowance/addition, and assessment year if relevant.
+                            </p>
+                        </div>
+                    </section>
+
+                    <!-- ─── Loading ──────────────────────────────── -->
+                    <section class="section hidden" id="caselawLoadingSection">
+                        <div class="caselaw-loading">
+                            <div class="progress-spinner"></div>
+                            <h3 id="caselawLoadingTitle">Searching case laws…</h3>
+                            <p id="caselawLoadingDesc">Searching Indian Kanoon, Taxmann and legal databases for matching precedents…</p>
+                        </div>
+                    </section>
+
+                    <!-- ─── Results ──────────────────────────────── -->
+                    <section class="section hidden" id="caselawResultsSection">
+                        <div class="caselaw-results-header">
+                            <h3 id="caselawResultsSummary">—</h3>
+                            <button class="btn-ghost btn-new" id="btnNewCaselawSearch">
+                                <i data-lucide="search"></i>
+                                <span>New Search</span>
+                            </button>
+                        </div>
+                        <div id="caselawResultsList" class="caselaw-results-list">
+                            <!-- Cards rendered by JS -->
+                        </div>
+                    </section>
+
+                    <!-- ─── No Results ──────────────────────────── -->
+                    <section class="section hidden" id="caselawNoResultsSection">
+                        <div class="caselaw-no-results">
+                            <i data-lucide="search-x"></i>
+                            <h3>No matching precedents found</h3>
+                            <p id="caselawNoResultsReason">—</p>
+                            <button class="btn-primary" id="btnRetryCaselaw">
+                                <i data-lucide="rotate-ccw"></i>
+                                <span>Try Again</span>
+                            </button>
+                        </div>
+                    </section>
+
+                    <!-- ─── Error ────────────────────────────────── -->
+                    <section class="section hidden" id="caselawErrorSection">
+                        <div class="error-card">
+                            <div class="error-icon-wrapper">
+                                <i data-lucide="alert-triangle"></i>
+                            </div>
+                            <h3>Something went wrong</h3>
+                            <p class="error-message" id="caselawErrorMessage">—</p>
+                            <button class="btn-primary btn-retry" id="btnCaselawErrorRetry">
+                                <i data-lucide="rotate-ccw"></i>
+                                <span>Try Again</span>
+                            </button>
+                        </div>
+                    </section>
+
+                </div>
+            </div>
+
         </main>
     </div>
 
     <!-- Scripts -->
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=3"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=6"></script>
 </body>
 </html>

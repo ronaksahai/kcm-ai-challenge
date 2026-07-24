@@ -115,8 +115,6 @@ def start_translation():
             "original_filename": original_filename,
             "upload_path": upload_path,
 
-            "output_rtf": None,
-            "extracted_text": None,
             "translated_text": None,
             "started_at": datetime.now().isoformat(),
         }
@@ -147,62 +145,7 @@ def translation_status(job_id):
         "stage": job["stage"],
         "detail": job["detail"],
         "progress": round(job["progress"] * 100, 1),
-        "error": job["error"],
-
-        "has_rtf": job["output_rtf"] is not None,
     })
-
-
-def _open_file_natively(file_path):
-    import sys
-    import subprocess
-    try:
-        if sys.platform == "darwin":
-            subprocess.run(["open", file_path])
-        elif sys.platform == "win32":
-            import os
-            os.startfile(file_path)
-    except Exception as e:
-        logger.error(f"Failed to open file natively: {e}")
-
-
-@app.route("/api/translate/download/<job_id>/<file_format>")
-def download_translation(job_id, file_format):
-    """Download the translated document as PDF or RTF."""
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-
-    if not job:
-        return jsonify({"error": "Job not found."}), 404
-
-    if job["status"] != "completed":
-        return jsonify({"error": "Job is not yet complete."}), 400
-
-    if file_format == "rtf":
-        file_path = job.get("output_rtf")
-        mimetype = "application/rtf"
-    else:
-        return jsonify({"error": "Invalid format. Use 'rtf'."}), 400
-
-    if not file_path or not os.path.exists(file_path):
-        return jsonify({"error": f"{file_format.upper()} file not found."}), 404
-
-    original_name = job.get("original_filename", "document")
-    base_name = os.path.splitext(original_name)[0]
-    download_name = f"{base_name}_translated.{file_format}"
-
-    _open_file_natively(file_path)
-
-    response = send_file(
-        file_path,
-        mimetype=mimetype,
-        as_attachment=True,
-        download_name=download_name,
-    )
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    return response
 
 
 @app.route("/api/translate/preview/<job_id>")
@@ -216,47 +159,27 @@ def preview_translation(job_id):
 
     return jsonify({
         "translated_text": job.get("translated_text", ""),
-        "extracted_text": job.get("extracted_text", ""),
     })
 
 
 # ── Pipeline Execution ───────────────────────────────────────
 
 def _run_pipeline(job_id: str):
-    """Execute the full OCR → Translate → Export pipeline in a background thread."""
+    """Execute the Gemini Translate → Export pipeline in a background thread."""
     try:
         job = _jobs[job_id]
         upload_path = job["upload_path"]
         original_filename = job["original_filename"]
         base_name = os.path.splitext(original_filename)[0]
 
-        # ── Stage 1: OCR (Extract text) ──────────────────────
-        _update_job(job_id, stage="extracting", detail="Extracting text from document…", progress=0.05)
+        # ── Stage 1: Translate (Gemini reads PDF + translates) ─
+        _update_job(job_id, stage="translating", detail="Sending document to Gemini…", progress=0.05)
 
-        from app.services.ocr_service import extract_text_from_pdf
-        extracted_text = extract_text_from_pdf(
+        from app.services.translate_service import translate_pdf
+        translated_text = translate_pdf(
             upload_path,
             progress_callback=lambda stage, detail, pct: _update_job(
-                job_id, stage=stage, detail=detail, progress=pct * 0.4  # 0-40%
-            ),
-        )
-
-        _update_job(job_id, stage="extracting", detail="Text extraction complete.", progress=0.40)
-        with _jobs_lock:
-            _jobs[job_id]["extracted_text"] = extracted_text
-
-        if not extracted_text.strip():
-            raise ValueError("No text could be extracted from the document. "
-                           "Please ensure the PDF contains readable text or scanned images.")
-
-        # ── Stage 2: Translate ───────────────────────────────
-        _update_job(job_id, stage="translating", detail="Translating to English…", progress=0.42)
-
-        from app.services.translate_service import translate_markdown
-        translated_text = translate_markdown(
-            extracted_text,
-            progress_callback=lambda stage, detail, pct: _update_job(
-                job_id, stage=stage, detail=detail, progress=0.42 + pct * 0.38  # 42-80%
+                job_id, stage=stage, detail=detail, progress=0.05 + pct * 0.75  # 5-80%
             ),
         )
 
@@ -264,20 +187,9 @@ def _run_pipeline(job_id: str):
         with _jobs_lock:
             _jobs[job_id]["translated_text"] = translated_text
 
-        # ── Stage 3: Generate output files ───────────────────
-        _update_job(job_id, stage="generating", detail="Generating RTF…", progress=0.82)
-
-        from app.services.rtf_service import generate_rtf
-
-        # Generate RTF
-        rtf_path = os.path.join(OUTPUT_DIR, f"{job_id}_{base_name}_translated.rtf")
-        generate_rtf(translated_text, rtf_path, original_filename)
-        with _jobs_lock:
-            _jobs[job_id]["output_rtf"] = rtf_path
-
         # ── Done ─────────────────────────────────────────────
         _update_job(job_id, status="completed", stage="completed",
-                    detail="Translation complete! Your documents are ready for download.",
+                    detail="Translation complete! You can now preview and print your document.",
                     progress=1.0)
 
         logger.info(f"Job {job_id} completed successfully.")
@@ -796,3 +708,70 @@ def _run_notice_reply(job_id: str):
                 os.remove(path)
         except OSError:
             pass
+
+
+# ═════════════════════════════════════════════════════════════
+#  CASE LAW / PRECEDENT FINDER
+# ═════════════════════════════════════════════════════════════
+
+CASELAW_ALLOWED_EXTENSIONS = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv", ".jpg", ".jpeg", ".png"}
+
+@app.route("/api/caselaw/search", methods=["POST"])
+def caselaw_search():
+    """
+    Synchronous endpoint — accepts a scenario description + optional file attachments.
+    Uses Gemini for discovery + Claude Fable 5 for deep analysis.
+    """
+    # Support both JSON and multipart/form-data
+    if request.content_type and "multipart/form-data" in request.content_type:
+        scenario = (request.form.get("query") or "").strip()
+        court_filter = (request.form.get("court_filter") or "all").strip()
+        uploaded_files = request.files.getlist("files")
+    else:
+        data = request.get_json(silent=True) or {}
+        scenario = (data.get("query") or "").strip()
+        court_filter = (data.get("court_filter") or "all").strip()
+        uploaded_files = []
+
+    if not scenario:
+        return jsonify({"error": "Please describe your tax scenario."}), 400
+
+    if len(scenario) < 15:
+        return jsonify({"error": "Please provide a more detailed scenario description."}), 400
+
+    # Extract text from uploaded files
+    context_texts = []
+    saved_paths = []
+    try:
+        from app.services.caselaw_service import search_precedents, extract_file_text
+
+        for f in uploaded_files:
+            if f and f.filename:
+                ext = os.path.splitext(f.filename)[1].lower()
+                if ext not in CASELAW_ALLOWED_EXTENSIONS:
+                    continue
+                save_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4().hex}{ext}")
+                f.save(save_path)
+                saved_paths.append(save_path)
+                text = extract_file_text(save_path)
+                if text:
+                    context_texts.append(f"--- From: {f.filename} ---\n{text}")
+
+        context_text = "\n\n".join(context_texts) if context_texts else ""
+
+        result = search_precedents(scenario, court_filter, context_text)
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Case law search failed: {e}\n{traceback.format_exc()}")
+        return jsonify({"error": f"Search failed: {str(e)}"}), 500
+
+    finally:
+        # Clean up uploaded files
+        for p in saved_paths:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except OSError:
+                pass
+

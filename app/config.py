@@ -24,6 +24,7 @@ SARVAM_TRANSLATE_URL = f"{SARVAM_BASE_URL}/translate"
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "")
 GCP_LOCATION = os.getenv("GCP_LOCATION", "us-central1")
 GEMINI_MODEL = "gemini-3.5-flash"
+TRANSLATE_GEMINI_MODEL = "gemini-3.6-flash"  # Used by the translator module
 
 # ── Sarvam Translate Settings ────────────────────────────────
 TRANSLATE_MODEL = "mayura:v1"

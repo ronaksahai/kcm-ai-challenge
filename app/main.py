@@ -54,39 +54,19 @@ def main():
     import time
     time.sleep(1)
 
-    # Launch the native window
+    # Launch in default browser instead of pywebview to ensure full print features
+    import webbrowser
+    url = f"http://{FLASK_HOST}:{FLASK_PORT}"
+    
+    logger.info(f"Opening {APP_NAME} in default web browser -> {url}")
+    webbrowser.open(url)
+    
+    # Keep the main thread alive since Flask is running in a daemon thread
     try:
-        import webview
-
-        url = f"http://{FLASK_HOST}:{FLASK_PORT}"
-        logger.info(f"Opening {APP_NAME} window -> {url}")
-
-        webview.create_window(
-            APP_NAME,
-            url=url,
-            width=1200,
-            height=800,
-            min_size=(900, 600),
-            resizable=True,
-            text_select=True,
-        )
-        webview.start()
-
-    except ImportError:
-        # Fallback: open in default browser if pywebview is not installed
-        import webbrowser
-
-        url = f"http://{FLASK_HOST}:{FLASK_PORT}"
-        logger.warning("pywebview not installed — opening in browser instead.")
-        logger.info(f"App running at: {url}")
-        webbrowser.open(url)
-
-        # Keep the main thread alive
-        try:
-            flask_thread.join()
-        except KeyboardInterrupt:
-            logger.info("Shutting down…")
-
-
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Shutting down KCM AI Suite...")
+        
 if __name__ == "__main__":
     main()

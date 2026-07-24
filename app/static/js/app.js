@@ -118,7 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const progressTitle = document.getElementById('progressTitle');
     const progressDetail = document.getElementById('progressDetail');
 
-    const btnDownloadRtf = document.getElementById('btnDownloadRtf');
+    const btnPrintTranslation = document.getElementById('btnPrintTranslation');
     const btnPreviewToggle = document.getElementById('btnPreviewToggle');
     const previewArea = document.getElementById('previewArea');
     const previewContent = document.getElementById('previewContent');
@@ -128,11 +128,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const stages = {
         uploading: document.getElementById('stageUpload'),
-        extracting: document.getElementById('stageExtract'),
         translating: document.getElementById('stageTranslate'),
         generating: document.getElementById('stageGenerate'),
     };
-    const stageOrder = ['uploading', 'extracting', 'translating', 'generating'];
+    const stageOrder = ['uploading', 'translating', 'generating'];
 
     // Upload zone events
     uploadZone.addEventListener('click', () => fileInput.click());
@@ -190,7 +189,7 @@ document.addEventListener('DOMContentLoaded', () => {
         progressBar.style.width = `${progress}%`;
         progressPct.textContent = `${Math.round(progress)}%`;
         progressDetail.textContent = detail;
-        const titles = { uploading: 'Uploading…', extracting: 'Extracting Text…', translating: 'Translating…', generating: 'Generating…' };
+        const titles = { uploading: 'Uploading…', translating: 'Translating…', generating: 'Generating…' };
         progressTitle.textContent = titles[stage] || 'Processing…';
         const currentIdx = stageOrder.indexOf(stage);
         stageOrder.forEach((s, idx) => {
@@ -202,7 +201,44 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 
-    btnDownloadRtf.addEventListener('click', () => { if (currentJobId) downloadFile(`/api/translate/download/${currentJobId}/rtf`); });
+    btnPrintTranslation.addEventListener('click', async () => {
+        if (!currentJobId) return;
+        
+        // Ensure preview is loaded and visible
+        if (previewArea.classList.contains('hidden')) {
+            previewArea.classList.remove('hidden');
+            btnPreviewToggle.querySelector('span').textContent = 'Hide Preview';
+            try {
+                const resp = await fetch(`/api/translate/preview/${currentJobId}`);
+                const data = await resp.json();
+                if (data.translated_text) {
+                    previewContent.innerHTML = data.translated_text;
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+        
+        // Handle Orientation dynamically
+        const orientation = document.getElementById('printOrientation').value;
+        let styleTag = document.getElementById('dynamic-print-style');
+        if (!styleTag) {
+            styleTag = document.createElement('style');
+            styleTag.id = 'dynamic-print-style';
+            document.head.appendChild(styleTag);
+        }
+        
+        if (orientation === 'landscape') {
+            styleTag.innerHTML = '@media print { @page { size: landscape; margin: 10mm; } }';
+        } else {
+            styleTag.innerHTML = '@media print { @page { size: portrait; margin: 10mm; } }';
+        }
+        
+        // Slight delay to allow preview rendering before printing
+        setTimeout(() => {
+            window.print();
+        }, 150);
+    });
 
     btnPreviewToggle.addEventListener('click', async () => {
         if (previewArea.classList.contains('hidden')) {
@@ -212,7 +248,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const resp = await fetch(`/api/translate/preview/${currentJobId}`);
                 const data = await resp.json();
                 if (data.translated_text) {
-                    previewContent.innerHTML = typeof marked !== 'undefined' ? marked.parse(data.translated_text) : data.translated_text;
+                    // Inject HTML directly, bypassing marked.js
+                    previewContent.innerHTML = data.translated_text;
                 } else { previewContent.innerHTML = '<p>No content available.</p>'; }
             } catch { previewContent.innerHTML = '<p class="error-msg">Failed to load preview.</p>'; }
         } else {
@@ -823,4 +860,277 @@ document.addEventListener('DOMContentLoaded', () => {
         if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
         return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     }
+
+    // ═════════════════════════════════════════════════════════
+    //  CASE LAW FINDER MODULE
+    // ═════════════════════════════════════════════════════════
+
+    const caselawScenario = document.getElementById('caselawScenario');
+    const caselawCourtFilter = document.getElementById('caselawCourtFilter');
+    const btnSearchCaselaw = document.getElementById('btnSearchCaselaw');
+    const caselawSearchSection = document.getElementById('caselawSearchSection');
+    const caselawLoadingSection = document.getElementById('caselawLoadingSection');
+    const caselawResultsSection = document.getElementById('caselawResultsSection');
+    const caselawNoResultsSection = document.getElementById('caselawNoResultsSection');
+    const caselawErrorSection = document.getElementById('caselawErrorSection');
+    const caselawResultsSummary = document.getElementById('caselawResultsSummary');
+    const caselawResultsList = document.getElementById('caselawResultsList');
+    const caselawNoResultsReason = document.getElementById('caselawNoResultsReason');
+    const caselawErrorMessage = document.getElementById('caselawErrorMessage');
+    const btnNewCaselawSearch = document.getElementById('btnNewCaselawSearch');
+    const btnRetryCaselaw = document.getElementById('btnRetryCaselaw');
+    const btnCaselawErrorRetry = document.getElementById('btnCaselawErrorRetry');
+    const caselawLoadingTitle = document.getElementById('caselawLoadingTitle');
+    const caselawLoadingDesc = document.getElementById('caselawLoadingDesc');
+
+    // File attachment elements
+    const caselawAttachZone = document.getElementById('caselawAttachZone');
+    const caselawFileInput = document.getElementById('caselawFileInput');
+    const caselawAttachedFiles = document.getElementById('caselawAttachedFiles');
+    let caselawFiles = []; // Array of File objects
+
+    // File attachment — click to browse
+    if (caselawAttachZone && caselawFileInput) {
+        caselawAttachZone.addEventListener('click', () => caselawFileInput.click());
+        caselawFileInput.addEventListener('change', (e) => {
+            addCaselawFiles(Array.from(e.target.files));
+            caselawFileInput.value = '';
+        });
+
+        // Drag & drop
+        caselawAttachZone.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); caselawAttachZone.classList.add('drag-over'); });
+        caselawAttachZone.addEventListener('dragleave', (e) => { e.preventDefault(); e.stopPropagation(); caselawAttachZone.classList.remove('drag-over'); });
+        caselawAttachZone.addEventListener('drop', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            caselawAttachZone.classList.remove('drag-over');
+            addCaselawFiles(Array.from(e.dataTransfer.files));
+        });
+    }
+
+    function addCaselawFiles(newFiles) {
+        const allowed = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.jpg', '.jpeg', '.png'];
+        for (const f of newFiles) {
+            const ext = '.' + f.name.split('.').pop().toLowerCase();
+            if (allowed.includes(ext) && !caselawFiles.find(ef => ef.name === f.name && ef.size === f.size)) {
+                caselawFiles.push(f);
+            }
+        }
+        renderCaselawFileChips();
+    }
+
+    function removeCaselawFile(idx) {
+        caselawFiles.splice(idx, 1);
+        renderCaselawFileChips();
+    }
+
+    function renderCaselawFileChips() {
+        if (!caselawAttachedFiles) return;
+        caselawAttachedFiles.innerHTML = '';
+        caselawFiles.forEach((f, idx) => {
+            const chip = document.createElement('div');
+            chip.className = 'attached-file-chip';
+            chip.innerHTML = `
+                <i data-lucide="file-text" style="width:14px;height:14px;"></i>
+                <span>${escapeHtml(f.name)}</span>
+                <button class="chip-remove" data-idx="${idx}" title="Remove">×</button>
+            `;
+            chip.querySelector('.chip-remove').addEventListener('click', (e) => {
+                e.stopPropagation();
+                removeCaselawFile(parseInt(e.target.dataset.idx));
+            });
+            caselawAttachedFiles.appendChild(chip);
+        });
+        if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 50);
+    }
+
+    function showCaselawSection(which) {
+        [caselawSearchSection, caselawLoadingSection, caselawResultsSection,
+         caselawNoResultsSection, caselawErrorSection].forEach(s => {
+            if (s) s.classList.add('hidden');
+        });
+        const map = {
+            search: caselawSearchSection,
+            loading: caselawLoadingSection,
+            results: caselawResultsSection,
+            noResults: caselawNoResultsSection,
+            error: caselawErrorSection,
+        };
+        if (map[which]) map[which].classList.remove('hidden');
+    }
+
+    function resetCaselawUI() {
+        showCaselawSection('search');
+        if (caselawResultsList) caselawResultsList.innerHTML = '';
+    }
+
+    if (btnNewCaselawSearch) btnNewCaselawSearch.addEventListener('click', resetCaselawUI);
+    if (btnRetryCaselaw) btnRetryCaselaw.addEventListener('click', resetCaselawUI);
+    if (btnCaselawErrorRetry) btnCaselawErrorRetry.addEventListener('click', resetCaselawUI);
+
+    if (btnSearchCaselaw) {
+        btnSearchCaselaw.addEventListener('click', async () => {
+            const query = caselawScenario ? caselawScenario.value.trim() : '';
+            if (!query) {
+                alert('Please describe your tax scenario.');
+                return;
+            }
+            if (query.length < 15) {
+                alert('Please provide a more detailed scenario description (at least 15 characters).');
+                return;
+            }
+
+            // Update loading message
+            if (caselawLoadingTitle) caselawLoadingTitle.textContent = 'Searching case laws…';
+            if (caselawLoadingDesc) caselawLoadingDesc.textContent = 'Searching Indian Kanoon, Taxmann and legal databases for matching precedents…';
+            showCaselawSection('loading');
+
+            try {
+                // Build FormData for file uploads
+                const formData = new FormData();
+                formData.append('query', query);
+                formData.append('court_filter', caselawCourtFilter ? caselawCourtFilter.value : 'all');
+                caselawFiles.forEach(f => formData.append('files', f));
+
+                const resp = await fetch('/api/caselaw/search', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                const data = await resp.json();
+
+                if (!resp.ok) {
+                    throw new Error(data.error || 'Search failed');
+                }
+
+                const results = data.results || [];
+
+                if (results.length === 0) {
+                    if (caselawNoResultsReason) {
+                        caselawNoResultsReason.textContent = data.no_results_reason || 'No case laws with substantially identical facts were found. Try rephrasing your scenario or broadening the court filter.';
+                    }
+                    showCaselawSection('noResults');
+                    return;
+                }
+
+                renderCaselawResults(results, data.search_summary);
+
+            } catch (e) {
+                if (caselawErrorMessage) caselawErrorMessage.textContent = e.message;
+                showCaselawSection('error');
+            }
+        });
+    }
+
+    function renderCaselawResults(results, summary) {
+        if (caselawResultsSummary) {
+            caselawResultsSummary.textContent = summary || `Found ${results.length} matching precedent${results.length > 1 ? 's' : ''}`;
+        }
+
+        if (!caselawResultsList) return;
+        caselawResultsList.innerHTML = '';
+
+        results.forEach((r, idx) => {
+            const courtClass = getCourtClass(r.court || '');
+            const citations = (r.citations || []).filter(c => c && c.trim());
+            const citationHtml = citations.map(c => `<span class="citation-tag">${escapeHtml(c)}</span>`).join('');
+
+            // Generate deterministic search links to avoid AI hallucinations and 404s
+            const hasTaxmann = citations.some(c => c.toLowerCase().includes('taxmann'));
+            
+            let sourceUrl = '';
+            let sourceLinkLabel = '';
+            let isTaxmannLink = false;
+            
+            if (hasTaxmann) {
+                const taxmannCitation = citations.find(c => c.toLowerCase().includes('taxmann'));
+                // Use a highly specific Google Search that guarantees a working link to Taxmann
+                sourceUrl = `https://www.google.com/search?q=${encodeURIComponent('"' + taxmannCitation + '" site:taxmann.com')}`;
+                sourceLinkLabel = 'Search on Taxmann';
+                isTaxmannLink = true;
+            } else if (r.case_name) {
+                // Fallback to Indian Kanoon's robust internal search engine
+                sourceUrl = `https://indiankanoon.org/search/?formInput=${encodeURIComponent(r.case_name)}`;
+                sourceLinkLabel = 'Search on Indian Kanoon';
+            }
+
+            const card = document.createElement('div');
+            card.className = 'caselaw-card';
+            card.innerHTML = `
+                <div class="caselaw-card-header">
+                    <div class="caselaw-card-title">
+                        <span class="caselaw-index">${idx + 1}</span>
+                        <h4>${escapeHtml(r.case_name || 'Unknown Case')}</h4>
+                    </div>
+                    <div class="caselaw-card-meta">
+                        <span class="court-badge ${courtClass}">${escapeHtml(r.court || 'Unknown')}</span>
+                        ${r.date ? `<span class="caselaw-date">${escapeHtml(r.date)}</span>` : ''}
+                        ${r.section ? `<span class="caselaw-section">§ ${escapeHtml(r.section)}</span>` : ''}
+                    </div>
+                </div>
+
+                <div class="caselaw-citations">
+                    <span class="citations-label">Citations:</span>
+                    ${citationHtml || '<span class="citation-tag citation-na">Not available</span>'}
+                </div>
+
+                <div class="caselaw-card-body">
+                    <div class="caselaw-para">
+                        <strong>Facts:</strong>
+                        <p>${escapeHtml(r.facts_summary || '—')}</p>
+                    </div>
+                    <div class="caselaw-para">
+                        <strong>Holding:</strong>
+                        <p>${escapeHtml(r.holding || '—')}</p>
+                    </div>
+                </div>
+
+                <div class="caselaw-card-footer">
+                    <button class="btn-copy-summary" data-idx="${idx}" title="Copy summary to clipboard">
+                        <i data-lucide="copy"></i>
+                        <span>Copy Summary</span>
+                    </button>
+                    ${sourceUrl ? `<a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener" class="btn-source-link ${isTaxmannLink ? 'btn-taxmann' : ''}">
+                        <i data-lucide="external-link"></i>
+                        <span>${sourceLinkLabel}</span>
+                    </a>` : ''}
+                </div>
+            `;
+
+            // Copy button handler
+            const copyBtn = card.querySelector('.btn-copy-summary');
+            if (copyBtn) {
+                copyBtn.addEventListener('click', () => {
+                    const citationsText = citations.length > 0 ? citations.join('; ') : '';
+                    const textToCopy = `${r.case_name || ''}\n${citationsText}\n${r.court || ''} | ${r.date || ''}\n\nFacts: ${r.facts_summary || ''}\n\nHolding: ${r.holding || ''}`;
+                    navigator.clipboard.writeText(textToCopy).then(() => {
+                        const span = copyBtn.querySelector('span');
+                        if (span) {
+                            span.textContent = 'Copied!';
+                            setTimeout(() => { span.textContent = 'Copy Summary'; }, 2000);
+                        }
+                    });
+                });
+            }
+
+            caselawResultsList.appendChild(card);
+        });
+
+        if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 50);
+        showCaselawSection('results');
+    }
+
+    function getCourtClass(court) {
+        const c = court.toLowerCase();
+        if (c.includes('supreme')) return 'court-sc';
+        if (c.includes('high')) return 'court-hc';
+        if (c.includes('itat') || c.includes('tribunal')) return 'court-itat';
+        return 'court-other';
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
 });

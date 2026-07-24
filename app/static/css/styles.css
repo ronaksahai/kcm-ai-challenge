@@ -1055,14 +1055,32 @@ body {
 
 .preview-content {
     padding: 24px;
-    max-height: 400px;
+    max-height: 500px;
     overflow-y: auto;
     font-size: 13px;
-    line-height: 1.7;
-    color: var(--text-secondary);
-    background: var(--bg-surface);
-    white-space: pre-wrap;
-    font-family: 'Inter', sans-serif;
+    line-height: 1.6;
+    color: #000000;
+    background: #ffffff;
+    white-space: normal;
+    font-family: system-ui, -apple-system, sans-serif;
+}
+
+.preview-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 15px 0;
+}
+
+.preview-content th, .preview-content td {
+    border: 1px solid #d1d5db;
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.preview-content th {
+    background-color: #f3f4f6;
+    font-weight: 600;
 }
 
 /* ── Error Section ─────────────────────────────────────────── */
@@ -1814,3 +1832,531 @@ body {
     background: transparent;
 }
 
+
+/* ═══════════════════════════════════════════════════════════════
+   CASE LAW FINDER
+   ═══════════════════════════════════════════════════════════════ */
+
+.caselaw-search-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.form-label {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.25rem;
+}
+
+.caselaw-textarea {
+    width: 100%;
+    padding: 1rem;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    resize: vertical;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.caselaw-textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(217, 175, 91, 0.15);
+}
+
+.caselaw-textarea::placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.caselaw-controls {
+    display: flex;
+    align-items: flex-end;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.caselaw-filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.filter-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.caselaw-select {
+    padding: 0.6rem 0.9rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+
+.caselaw-select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.caselaw-hint {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+}
+
+/* Loading */
+.caselaw-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 3rem 1rem;
+    text-align: center;
+}
+
+.caselaw-loading h3 {
+    color: var(--text-primary);
+    font-size: 1.1rem;
+}
+
+.caselaw-loading p {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    max-width: 400px;
+}
+
+/* Results Header */
+.caselaw-results-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.caselaw-results-header h3 {
+    font-size: 1rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+/* Result Cards */
+.caselaw-results-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.caselaw-card {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--accent);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.caselaw-card:hover {
+    border-color: var(--accent);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.caselaw-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.caselaw-card-title {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    flex: 1;
+}
+
+.caselaw-index {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--bg-primary);
+    font-size: 0.8rem;
+    font-weight: 700;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.caselaw-card-title h4 {
+    font-size: 1.05rem;
+    color: var(--text-primary);
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.caselaw-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+
+/* Court Badges */
+.court-badge {
+    padding: 0.25rem 0.65rem;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+}
+
+.court-sc {
+    background: rgba(220, 38, 38, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(220, 38, 38, 0.3);
+}
+
+.court-hc {
+    background: rgba(37, 99, 235, 0.15);
+    color: #60a5fa;
+    border: 1px solid rgba(37, 99, 235, 0.3);
+}
+
+.court-itat {
+    background: rgba(22, 163, 74, 0.15);
+    color: #4ade80;
+    border: 1px solid rgba(22, 163, 74, 0.3);
+}
+
+.court-other {
+    background: rgba(161, 161, 170, 0.15);
+    color: #a1a1aa;
+    border: 1px solid rgba(161, 161, 170, 0.3);
+}
+
+.caselaw-date,
+.caselaw-section {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.caselaw-section {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+/* Citations */
+.caselaw-citations {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.citations-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.citation-tag {
+    padding: 0.2rem 0.6rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    background: rgba(217, 175, 91, 0.1);
+    color: var(--accent);
+    border: 1px solid rgba(217, 175, 91, 0.25);
+}
+
+.citation-na {
+    background: rgba(161, 161, 170, 0.1);
+    color: var(--text-muted);
+    border-color: rgba(161, 161, 170, 0.2);
+    font-family: inherit;
+    font-style: italic;
+}
+
+/* Card Body */
+.caselaw-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.caselaw-para strong {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.caselaw-para p {
+    font-size: 0.92rem;
+    color: var(--text-primary);
+    line-height: 1.65;
+    margin-top: 0.25rem;
+}
+
+/* Card Footer */
+.caselaw-card-footer {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.btn-copy-summary,
+.btn-source-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none;
+    border: none;
+    font-family: inherit;
+}
+
+.btn-copy-summary {
+    background: rgba(217, 175, 91, 0.1);
+    color: var(--accent);
+    border: 1px solid rgba(217, 175, 91, 0.25);
+}
+
+.btn-copy-summary:hover {
+    background: rgba(217, 175, 91, 0.2);
+}
+
+.btn-copy-summary svg,
+.btn-source-link svg {
+    width: 14px;
+    height: 14px;
+}
+
+.btn-source-link {
+    background: rgba(37, 99, 235, 0.1);
+    color: #60a5fa;
+    border: 1px solid rgba(37, 99, 235, 0.25);
+}
+
+.btn-source-link:hover {
+    background: rgba(37, 99, 235, 0.2);
+}
+
+/* File Attachment */
+.caselaw-attach-area {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.optional-tag {
+    font-weight: 400;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.caselaw-attach-zone {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.75rem 1rem;
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    font-size: 0.88rem;
+    color: var(--text-muted);
+}
+
+.caselaw-attach-zone:hover,
+.caselaw-attach-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(217, 175, 91, 0.05);
+}
+
+.caselaw-attach-zone strong {
+    color: var(--accent);
+}
+
+.attach-formats {
+    margin-left: auto;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    opacity: 0.7;
+}
+
+.caselaw-attached-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.attached-file-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.6rem;
+    border-radius: 6px;
+    background: rgba(217, 175, 91, 0.1);
+    border: 1px solid rgba(217, 175, 91, 0.2);
+    font-size: 0.8rem;
+    color: var(--text-primary);
+}
+
+.chip-remove {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 0.15rem;
+    transition: color 0.2s;
+}
+
+.chip-remove:hover {
+    color: #f87171;
+}
+
+/* Taxmann Button */
+.btn-taxmann {
+    background: rgba(22, 163, 74, 0.1) !important;
+    color: #4ade80 !important;
+    border: 1px solid rgba(22, 163, 74, 0.25) !important;
+}
+
+.btn-taxmann:hover {
+    background: rgba(22, 163, 74, 0.2) !important;
+}
+
+/* No Results */
+.caselaw-no-results {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 3rem 1rem;
+    text-align: center;
+}
+
+.caselaw-no-results svg {
+    width: 48px;
+    height: 48px;
+    color: var(--text-muted);
+}
+
+.caselaw-no-results h3 {
+    color: var(--text-primary);
+    font-size: 1.1rem;
+}
+
+.caselaw-no-results p {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    max-width: 500px;
+}
+
+/* ── Print Mode ────────────────────────────────────────────── */
+@media print {
+    /* Hide ALL sidebar, headers, buttons, and inactive sections globally */
+    .sidebar,
+    .content-header,
+    .completed-icon-wrapper,
+    .completed-card > h3,
+    .completed-subtitle,
+    .download-buttons,
+    .btn-preview-toggle,
+    .btn-new,
+    .upload-section,
+    .progress-section,
+    .error-section,
+    .file-info-section {
+        display: none !important;
+    }
+    
+    /* Ensure the body background is white for printing */
+    body {
+        background: white !important;
+        color: black !important;
+    }
+
+    /* CRITICAL: Un-restrict the height and overflow of all parent containers 
+       so the browser can print multiple pages instead of cutting off at 1 page */
+    body, html, 
+    .app-container,
+    .main-content, 
+    .content-body, 
+    .completed-section, 
+    .completed-card, 
+    .preview-area, 
+    .preview-content {
+        display: block !important;
+        position: static !important;
+        height: auto !important;
+        min-height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: none !important;
+        box-shadow: none !important;
+        background: transparent !important;
+    }
+    
+    .preview-content {
+        color: black !important;
+    }
+}
+
+.caselaw-no-results h3 {
+    color: var(--text-primary);
+    font-size: 1.1rem;
+}
+
+.caselaw-no-results p {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    max-width: 500px;
+}

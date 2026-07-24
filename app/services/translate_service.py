@@ -1,336 +1,181 @@
 """
 KCM AI Suite — Translation Service
-Integrates with Sarvam AI Translate API.
-Handles text chunking and markdown-aware Gujarati-to-English translation.
+Uses Google Gemini to read PDFs directly and translate Gujarati to English.
+Replaces the previous Sarvam-based chunked translation pipeline.
 """
 
-import re
 import time
 import logging
-import threading
-import requests
+
+from google import genai
+from google.genai import types, errors
 
 from app.config import (
-    SARVAM_API_KEY,
-    SARVAM_TRANSLATE_URL,
-    TRANSLATE_MODEL,
-    TRANSLATE_MODE,
-    TRANSLATE_CHUNK_LIMIT,
-    TARGET_LANGUAGE,
+    GCP_PROJECT_ID,
+    GCP_LOCATION,
+    TRANSLATE_GEMINI_MODEL,
 )
 
 logger = logging.getLogger(__name__)
 
-# Source language is always Gujarati for this module
-SOURCE_LANGUAGE = "gu-IN"
+# ── Gemini Setup ─────────────────────────────────────────────
 
-# ── Rate Limiter ─────────────────────────────────────────────
-# Sarvam Starter tier allows 60 req/min. We cap at 50 to stay safe.
-_RATE_LIMIT_RPM = 50
-_rate_lock = threading.Lock()
-_request_timestamps: list[float] = []
+_client = None
 
 
-def _wait_for_rate_limit():
-    """
-    Thread-safe sliding-window rate limiter.
-    Blocks the calling thread until a request slot is available.
-    Shared across all translation jobs so concurrent threads
-    collectively stay under the Sarvam API rate limit.
-    """
-    window = 60.0  # 1-minute sliding window
-    while True:
-        with _rate_lock:
-            now = time.monotonic()
-            # Prune timestamps older than the window
-            while _request_timestamps and _request_timestamps[0] <= now - window:
-                _request_timestamps.pop(0)
-            if len(_request_timestamps) < _RATE_LIMIT_RPM:
-                _request_timestamps.append(now)
-                return  # Slot acquired
-            # Calculate how long to wait for the oldest entry to expire
-            wait_time = _request_timestamps[0] - (now - window) + 0.05
-        logger.debug(f"Rate limit reached ({_RATE_LIMIT_RPM}/min), waiting {wait_time:.1f}s…")
-        time.sleep(wait_time)
+def _get_client():
+    global _client
+    if _client is None:
+        _client = genai.Client(
+            vertexai=True,
+            project=GCP_PROJECT_ID,
+            location=GCP_LOCATION,
+        )
+    return _client
+
+
+# ── Translation Prompt ───────────────────────────────────────
+
+TRANSLATE_PROMPT = r"""You are an expert translator specializing in Indian languages, particularly Gujarati.
+
+TASK: Read the attached PDF document and translate ALL text content from Gujarati to English.
+
+RULES:
+- Translate the ENTIRE document — do not skip or summarize any section.
+- Preserve the document structure using clean, semantic HTML formatting.
+- Output ONLY valid HTML code. Do NOT output Markdown. Do NOT wrap the HTML in ```html blocks.
+- Use basic HTML tags: <h2>, <h3>, <p>, <ul>, <li>, <strong>, etc.
+- For tables, use standard HTML: <table>, <thead>, <tbody>, <tr>, <th>, <td>.
+- You may use inline CSS for basic layout (e.g., style="text-align: center;", style="border: 1px solid black;", style="border-collapse: collapse;").
+- Translate by meaning/sense, not word-for-word. The English output should read naturally.
+- For financial/legal terms, use standard Indian English equivalents (e.g., "assessee", "assessment year", "computation of income").
+- Keep proper nouns (names, PAN numbers, addresses, dates, amounts in ₹) as-is — do not translate them.
+- If any text is already in English, keep it unchanged.
+- If certain text is illegible or unclear, mark it as [illegible] rather than guessing.
+- Do NOT add any commentary, notes, or explanations — output ONLY the translated HTML document.
+"""
 
 
 # ── Public API ───────────────────────────────────────────────
-def translate_markdown(
-    markdown_text: str,
-    progress_callback=None,
-) -> str:
+
+def translate_pdf(pdf_path: str, progress_callback=None) -> str:
     """
-    Translate Gujarati markdown text to English.
-    Preserves markdown structure (headings, tables, bullets, etc.).
+    Translate a Gujarati PDF to English using Gemini.
+    Sends the PDF directly to Gemini for combined OCR + translation.
 
     Args:
-        markdown_text: Extracted markdown from OCR.
+        pdf_path: Absolute path to the PDF file.
         progress_callback: Optional callable(stage, detail, pct).
 
     Returns:
-        Translated markdown text in English.
+        Translated text in Markdown format.
     """
-    if not markdown_text.strip():
-        return ""
-
-    logger.info(f"Translating from Gujarati (gu-IN) to English (en-IN)")
-
-    # Strip massive base64 embedded images from markdown (prevents API 500 errors)
-    markdown_text = re.sub(r'!\[.*?\]\(data:image\/.*?;base64,[a-zA-Z0-9\+\/]+={0,2}\)', '', markdown_text)
-    markdown_text = re.sub(r'<img[^>]+src="data:image\/.*?;base64,[a-zA-Z0-9\+\/]+={0,2}"[^>]*>', '', markdown_text, flags=re.IGNORECASE)
-
-    # Parse markdown into translatable segments
-    segments = _parse_markdown_segments(markdown_text)
-    total_segments = len([s for s in segments if s["translatable"]])
-    translated_count = 0
+    logger.info(f"Starting Gemini translation for: {pdf_path}")
 
     if progress_callback:
-        progress_callback("translating", f"Translating {total_segments} segments…", 0.0)
+        progress_callback("translating", "Reading document…", 0.1)
 
-    # Translate each segment
-    translated_segments = []
-    for seg in segments:
-        if not seg["translatable"]:
-            # Non-translatable (empty lines, separators, etc.) — keep as-is
-            translated_segments.append(seg["text"])
-            continue
+    # Read PDF as bytes
+    with open(pdf_path, "rb") as f:
+        pdf_bytes = f.read()
 
-        prefix = seg.get("prefix", "")
-        text = seg["content"]
+    pdf_size_mb = len(pdf_bytes) / (1024 * 1024)
+    logger.info(f"PDF size: {pdf_size_mb:.1f} MB")
 
-        # Chunk the text if it's too long
-        chunks = _chunk_text(text, TRANSLATE_CHUNK_LIMIT)
-        translated_parts = []
+    if progress_callback:
+        progress_callback("translating", "Translating document with Gemini…", 0.2)
 
-        for chunk in chunks:
-            translated_chunk = _call_translate_api(chunk)
-            translated_parts.append(translated_chunk)
+    # Send to Gemini
+    translated_text = _call_gemini(pdf_bytes)
 
-        translated_text = " ".join(translated_parts)
-        translated_segments.append(f"{prefix}{translated_text}")
+    if not translated_text.strip():
+        raise ValueError(
+            "No text could be extracted or translated from the document. "
+            "Please ensure the PDF contains readable text or scanned images."
+        )
 
-        translated_count += 1
-        if progress_callback:
-            pct = translated_count / total_segments if total_segments > 0 else 1.0
-            progress_callback(
-                "translating",
-                f"Translated {translated_count}/{total_segments} segments…",
-                pct,
-            )
+    logger.info(f"Translation complete: {len(translated_text)} characters")
 
-    result = "\n".join(translated_segments)
-    logger.info(f"Translation complete: {len(result)} characters")
-    return result
+    if progress_callback:
+        progress_callback("translating", "Translation complete.", 1.0)
+
+    return translated_text
 
 
-# ── Private helpers ──────────────────────────────────────────
-def _parse_markdown_segments(text: str) -> list:
+# ── Private Helpers ──────────────────────────────────────────
+
+def _call_gemini(pdf_bytes: bytes) -> str:
     """
-    Parse markdown text into segments, identifying structural prefixes
-    so we can translate only the text content while preserving formatting.
+    Send PDF bytes to Gemini for OCR + translation.
+    Includes model fallback chain and retry with exponential backoff.
     """
-    lines = text.split("\n")
-    segments = []
+    client = _get_client()
 
-    for line in lines:
-        stripped = line.strip()
-
-        # Empty line
-        if not stripped:
-            segments.append({"text": "", "translatable": False})
-            continue
-
-        # Table separator row (e.g., |---|---|)
-        if re.match(r"^\|[\s\-:|\+]+\|?$", stripped):
-            segments.append({"text": line, "translatable": False})
-            continue
-
-        # Horizontal rule
-        if stripped in ("---", "***", "___", "- - -", "* * *"):
-            segments.append({"text": line, "translatable": False})
-            continue
-
-        # Heading (# Heading text)
-        heading_match = re.match(r"^(#{1,6}\s+)(.*)", line)
-        if heading_match:
-            segments.append({
-                "text": line,
-                "translatable": True,
-                "prefix": heading_match.group(1),
-                "content": heading_match.group(2),
-            })
-            continue
-
-        # Table row ( | cell | cell | )
-        if "|" in stripped and stripped.startswith("|"):
-            cells = stripped.split("|")
-            # Translate each cell individually
-            translated_cells = []
-            for cell in cells:
-                cell_stripped = cell.strip()
-                if cell_stripped:
-                    translated_cells.append(cell_stripped)
-
-            if translated_cells:
-                segments.append({
-                    "text": line,
-                    "translatable": True,
-                    "prefix": "| ",
-                    "content": " | ".join(translated_cells),
-                    "is_table_row": True,
-                    "cell_contents": translated_cells,
-                })
-                continue
-
-        # Bullet point
-        bullet_match = re.match(r"^(\s*[-*+]\s+)(.*)", line)
-        if bullet_match:
-            segments.append({
-                "text": line,
-                "translatable": True,
-                "prefix": bullet_match.group(1),
-                "content": bullet_match.group(2),
-            })
-            continue
-
-        # Numbered list
-        numbered_match = re.match(r"^(\s*\d+\.\s+)(.*)", line)
-        if numbered_match:
-            segments.append({
-                "text": line,
-                "translatable": True,
-                "prefix": numbered_match.group(1),
-                "content": numbered_match.group(2),
-            })
-            continue
-
-        # Regular paragraph line
-        segments.append({
-            "text": line,
-            "translatable": True,
-            "prefix": "",
-            "content": stripped,
-        })
-
-    return segments
-
-
-def _chunk_text(text: str, limit: int) -> list:
-    """
-    Split text into chunks of at most `limit` characters.
-    Tries to split at sentence boundaries (। or . or newline).
-    """
-    if len(text) <= limit:
-        return [text]
-
-    chunks = []
-    remaining = text
-
-    while len(remaining) > limit:
-        # Find the best split point (sentence boundary) within the limit
-        split_pos = limit
-
-        # Try splitting at Devanagari/Gujarati purna viram (।) first
-        viram_pos = remaining.rfind("।", 0, limit)
-        if viram_pos > limit * 0.3:
-            split_pos = viram_pos + 1
-        else:
-            # Try period
-            period_pos = remaining.rfind(".", 0, limit)
-            if period_pos > limit * 0.3:
-                split_pos = period_pos + 1
-            else:
-                # Try space
-                space_pos = remaining.rfind(" ", 0, limit)
-                if space_pos > limit * 0.3:
-                    split_pos = space_pos + 1
-
-        chunks.append(remaining[:split_pos].strip())
-        remaining = remaining[split_pos:].strip()
-
-    if remaining:
-        chunks.append(remaining)
-
-    return chunks
-
-
-# Retry config for 429 / 5xx errors
-_MAX_RETRIES = 5
-_INITIAL_BACKOFF = 2.0  # seconds
-
-
-def _call_translate_api(text: str) -> str:
-    """
-    Call the Sarvam Translate API for a single text chunk.
-    Uses the global rate limiter and retries with exponential
-    backoff on 429 (rate-limit) and 5xx (server) errors.
-    """
-    if not text.strip():
-        return text
-
-    payload = {
-        "input": text,
-        "source_language_code": SOURCE_LANGUAGE,
-        "target_language_code": TARGET_LANGUAGE,
-        "model": TRANSLATE_MODEL,
-        "mode": TRANSLATE_MODE,
-    }
-    headers = {
-        "api-subscription-key": SARVAM_API_KEY,
-        "Content-Type": "application/json",
-    }
-
-    last_exception = None
-    for attempt in range(_MAX_RETRIES):
-        # Wait for a slot from the global rate limiter
-        _wait_for_rate_limit()
-
-        try:
-            resp = requests.post(
-                SARVAM_TRANSLATE_URL,
-                json=payload,
-                headers=headers,
-                timeout=30,
-            )
-            resp.raise_for_status()
-            result = resp.json()
-            return result.get("translated_text", text)
-
-        except requests.exceptions.HTTPError as e:
-            last_exception = e
-            status = e.response.status_code if e.response is not None else 0
-
-            if status == 429 or status >= 500:
-                backoff = _INITIAL_BACKOFF * (2 ** attempt)
-                logger.warning(
-                    f"Translate API returned {status} (attempt {attempt + 1}/{_MAX_RETRIES}). "
-                    f"Retrying in {backoff:.1f}s…"
-                )
-                time.sleep(backoff)
-                continue
-
-            # Non-retryable HTTP error (4xx other than 429)
-            logger.error(f"Translation API error: {e} — Response: {e.response.text}")
-            raise
-
-        except requests.exceptions.ConnectionError as e:
-            last_exception = e
-            backoff = _INITIAL_BACKOFF * (2 ** attempt)
-            logger.warning(
-                f"Connection error (attempt {attempt + 1}/{_MAX_RETRIES}). "
-                f"Retrying in {backoff:.1f}s…"
-            )
-            time.sleep(backoff)
-            continue
-
-        except Exception as e:
-            logger.error(f"Translation failed: {e}")
-            raise
-
-    # All retries exhausted
-    logger.error(
-        f"Translation failed after {_MAX_RETRIES} retries. Last error: {last_exception}"
+    pdf_part = types.Part.from_bytes(
+        data=pdf_bytes,
+        mime_type="application/pdf",
     )
-    if last_exception is not None:
-        raise last_exception
-    raise RuntimeError(f"Translation failed after {_MAX_RETRIES} retries")
+    contents = [TRANSLATE_PROMPT, pdf_part]
+
+    # Model fallback chain
+    models_to_try = [TRANSLATE_GEMINI_MODEL]
+    for fallback in ["gemini-3.5-flash", "gemini-2.5-flash"]:
+        if fallback not in models_to_try:
+            models_to_try.append(fallback)
+
+    max_retries = 5
+
+    for model_name in models_to_try:
+        for attempt in range(max_retries):
+            try:
+                logger.info(
+                    f"Calling Gemini model={model_name} "
+                    f"(attempt {attempt + 1}/{max_retries})"
+                )
+
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        max_output_tokens=8192,
+                    ),
+                )
+
+                result = response.text or ""
+                logger.info(
+                    f"Gemini response received: {len(result)} characters "
+                    f"(model={model_name})"
+                )
+                return result
+
+            except errors.APIError as e:
+                if "503" in str(e) or getattr(e, "code", None) == 503:
+                    if attempt < max_retries - 1:
+                        sleep_time = 2 ** attempt
+                        logger.warning(
+                            f"Model {model_name} overloaded (503). "
+                            f"Retrying in {sleep_time}s…"
+                        )
+                        time.sleep(sleep_time)
+                        continue
+                    else:
+                        logger.error(
+                            f"Model {model_name} overloaded (503). "
+                            f"Exhausted retries."
+                        )
+                        break  # Try next model
+                else:
+                    logger.error(f"API error with model {model_name}: {e}")
+                    break  # Try next model
+
+            except Exception as e:
+                logger.error(
+                    f"Unexpected error with model {model_name}: {e}"
+                )
+                break  # Try next model
+
+    raise RuntimeError(
+        "Failed to translate document with Gemini API. "
+        "Please try again later."
+    )
