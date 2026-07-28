@@ -40,7 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedFile = null;
     let currentJobId = null;
     let pollInterval = null;
-    let activeModule = 'translator';
+    let activeModule = 'landing';
 
     // Scrutiny state
     let scrutinyFiles = { comp: null, intim: null, ao: null, cita: null, cita_comp: null };
@@ -71,8 +71,34 @@ document.addEventListener('DOMContentLoaded', () => {
             m.classList.toggle('active', m.id === mod + 'Module');
         });
         if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 50);
-        checkApiStatus();
+        
+        // Toggle landing layout
+        document.body.classList.toggle('is-landing', mod === 'landing');
+        
+        // Only check API status for modules that need it (not landing)
+        if (mod !== 'landing') {
+            checkApiStatus();
+        }
     }
+
+    // Home / Logo click
+    const navHome = document.getElementById('nav-home');
+    if (navHome) {
+        navHome.addEventListener('click', (e) => {
+            e.preventDefault();
+            switchModule('landing');
+        });
+    }
+
+    // Landing grid cards click
+    const landingCards = document.querySelectorAll('.landing-card');
+    landingCards.forEach(card => {
+        card.addEventListener('click', (e) => {
+            e.preventDefault();
+            const target = card.dataset.target;
+            if (target) switchModule(target);
+        });
+    });
 
     // ── API Status ──────────────────────────────────────────
     checkApiStatus();

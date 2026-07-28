@@ -1,0 +1,33 @@
+# Virtual environment
+venv/
+
+# Git
+.git/
+.gitignore
+
+# Environment & secrets
+.env
+.env.example
+service_account.json
+
+# Sample data & debug files
+SampleData/
+debug/
+*.md
+test_*.py
+
+# OS files
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+.agents/
+
+# Docker
+Dockerfile
+.dockerignore
+.gcloudignore

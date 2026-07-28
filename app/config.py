@@ -40,9 +40,14 @@ SUPPORTED_LANGUAGES = {
 }
 
 # ── File / Directory Settings ────────────────────────────────
-APPDATA_DIR = os.path.join(os.getenv("APPDATA", os.path.expanduser("~")), APP_NAME)
-TEMP_DIR = os.path.join(APPDATA_DIR, "temp")
-OUTPUT_DIR = os.path.join(APPDATA_DIR, "output")
+# In Cloud Run, the filesystem is read-only except /tmp.
+# Detect container environment via the PORT env var (injected by Cloud Run).
+_IS_CLOUD = bool(os.getenv("PORT"))
+_BASE_DIR = "/tmp/kcm-ai-suite" if _IS_CLOUD else os.path.join(os.getenv("APPDATA", os.path.expanduser("~")), APP_NAME)
+
+APPDATA_DIR = _BASE_DIR
+TEMP_DIR = os.path.join(_BASE_DIR, "temp")
+OUTPUT_DIR = os.path.join(_BASE_DIR, "output")
 MAX_PAGES_PER_JOB = 10         # Sarvam Document Intelligence limit
 MAX_FILE_SIZE_MB = 200         # Sarvam upload limit
 
@@ -51,7 +56,8 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ── Flask Settings ───────────────────────────────────────────
-FLASK_HOST = "127.0.0.1"
-FLASK_PORT = 5767              # local-only port
+FLASK_HOST = "0.0.0.0"                        # Listen on all interfaces (required for Cloud Run)
+FLASK_PORT = int(os.getenv("PORT", 5767))      # Cloud Run injects PORT; fallback to 5767 locally
 UPLOAD_FOLDER = os.path.join(TEMP_DIR, "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+

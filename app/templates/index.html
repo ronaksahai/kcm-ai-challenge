@@ -20,13 +20,13 @@
     <!-- Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
-<body>
+<body class="is-landing">
     <div class="app-container">
 
         <!-- ─── Sidebar ──────────────────────────────────── -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <div class="logo">
+                <a href="#" class="logo" id="nav-home">
                     <div class="logo-icon">
                         <i data-lucide="scale" class="logo-svg"></i>
                     </div>
@@ -34,12 +34,12 @@
                         <span class="logo-title">KCM AI</span>
                         <span class="logo-subtitle">Suite</span>
                     </div>
-                </div>
+                </a>
             </div>
 
             <nav class="sidebar-nav">
                 <div class="nav-section-label">MODULES</div>
-                <a href="#" class="nav-item active" id="nav-translator" data-module="translator">
+                <a href="#" class="nav-item" id="nav-translator" data-module="translator">
                     <i data-lucide="languages"></i>
                     <span>Document Translator</span>
                     <div class="nav-active-indicator"></div>
@@ -74,9 +74,48 @@
         <main class="main-content">
 
             <!-- ═══════════════════════════════════════════════
+                 MODULE: Landing Page
+                 ═══════════════════════════════════════════════ -->
+            <div id="landingModule" class="module-content active">
+                <header class="content-header">
+                    <div class="header-left">
+                        <h1>
+                            Welcome to KCM AI Suite
+                        </h1>
+                        <p class="header-desc">
+                            Select a module below to get started with intelligent legal and tax document processing.
+                        </p>
+                    </div>
+                </header>
+
+                <div class="landing-grid">
+                    <a href="#" class="landing-card" data-target="translator">
+                        <div class="landing-card-icon"><i data-lucide="languages"></i></div>
+                        <h3>Document Translator</h3>
+                        <p>Translate scanned Gujarati legal documents to English with high accuracy.</p>
+                    </a>
+                    <a href="#" class="landing-card" data-target="scrutiny">
+                        <div class="landing-card-icon"><i data-lucide="file-search"></i></div>
+                        <h3>Order Scrutiny</h3>
+                        <p>Automatically analyze tax assessment orders and summarize key additions/disallowances.</p>
+                    </a>
+                    <a href="#" class="landing-card" data-target="noticeReply">
+                        <div class="landing-card-icon"><i data-lucide="reply"></i></div>
+                        <h3>Notice Reply</h3>
+                        <p>Draft professional replies to income tax notices instantly using AI.</p>
+                    </a>
+                    <a href="#" class="landing-card" data-target="caselaw">
+                        <div class="landing-card-icon"><i data-lucide="scale"></i></div>
+                        <h3>Case Law Finder</h3>
+                        <p>Find precedents with matching facts for your tax scenario using deep AI analysis.</p>
+                    </a>
+                </div>
+            </div>
+
+            <!-- ═══════════════════════════════════════════════
                  MODULE: Document Translator
                  ═══════════════════════════════════════════════ -->
-            <div id="translatorModule" class="module-content active">
+            <div id="translatorModule" class="module-content">
 
                 <!-- Header -->
                 <header class="content-header">
