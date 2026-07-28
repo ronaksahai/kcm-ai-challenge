@@ -2,13 +2,13 @@
 
 **Intelligent document processing tools for Corporate Tax professionals.**
 
-KCM AI Suite is an installable desktop application designed for CA firms. It leverages Sarvam AI and Google Gemini's advanced processing capabilities to automate document workflows, tax scrutiny, and reply drafting.
+KCM AI Suite is an intelligent web application designed for CA firms. It leverages Google Gemini's advanced processing capabilities to automate document translation, tax scrutiny, notice replies, and case law research.
 
 ---
 
 ## 🌐 Module 1: Document Translator
 
-Translate scanned legal documents from **Gujarati**, **Hindi**, and **Marathi** to **English** — powered by Sarvam AI.
+Translate scanned legal documents from **Gujarati**, **Hindi**, and **Marathi** to **English** — powered by Google Gemini.
 
 ### Supported Document Types
 - Sale deeds & Property documents
@@ -19,9 +19,8 @@ Translate scanned legal documents from **Gujarati**, **Hindi**, and **Marathi** 
 
 ### How It Works
 1. **Upload** a scanned PDF document
-2. **OCR** — Sarvam Vision extracts text while preserving layout
-3. **Translate** — Sarvam Translate converts to English
-4. **Download** — Get the translated document as PDF or RTF
+2. **Translate** — Google Gemini extracts text and translates it to English while preserving context
+3. **Download** — Get the translated document as PDF or RTF
 
 ---
 
@@ -50,11 +49,22 @@ Automatically draft reply skeletons for Income Tax Department notices and genera
 
 ---
 
+## ⚖️ Module 4: Case Law Finder
+
+Find precedents and case laws with matching facts for your tax scenario using deep AI analysis.
+
+### How It Works
+1. **Describe Scenario** — Enter your tax issue, dispute, or notice details.
+2. **Search** — Automatically searches Indian Kanoon and Taxmann for relevant cases.
+3. **Analyze** — Gemini AI reads the full case texts to find the most relevant facts.
+4. **Report** — Provides a comprehensive summary of relevant case laws with clickable citation links.
+
+---
+
 ## 🚀 Quick Start
 
 ### Prerequisites
 - Python 3.10 or higher
-- A Sarvam AI API key ([Get one here](https://dashboard.sarvam.ai/))
 - A Google Cloud Platform (GCP) Project with Vertex AI API enabled
 - A GCP Service Account JSON key (or use Application Default Credentials)
 
@@ -67,27 +77,38 @@ cd kcm-ai-challenge
 
 # 2. Create a virtual environment
 python -m venv venv
-venv\Scripts\activate        # Windows
-# source venv/bin/activate   # macOS/Linux
+source venv/bin/activate   # macOS/Linux (or venv\Scripts\activate on Windows)
 
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Configure your API keys and GCP settings
-#    Open .env and set SARVAM_API_KEY, GCP_PROJECT_ID, and GCP_LOCATION
-notepad .env
-
-# 5. Set up Google Cloud Authentication (if using a service account key file)
-export GOOGLE_APPLICATION_CREDENTIALS="path/to/your/service_account.json"
+# 4. Configure your GCP settings
+#    Open .env and set GCP_PROJECT_ID and GCP_LOCATION
+nano .env
 ```
 
-### Run the App
+### Run Locally
 
 ```bash
 python -m app.main
 ```
 
-The app will open in a native desktop window. If `pywebview` is not installed, it will fall back to your default browser.
+The app will start a local web server (using Flask/Gunicorn) and be available at `http://localhost:5767`.
+
+### Deploy to Google Cloud Run
+
+```bash
+gcloud run deploy kcm-ai-suite \
+  --source . \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --memory 1Gi \
+  --cpu 1 \
+  --timeout 300 \
+  --max-instances 3 \
+  --no-cpu-throttling \
+  --session-affinity
+```
 
 ---
 
@@ -95,20 +116,23 @@ The app will open in a native desktop window. If `pywebview` is not installed, i
 
 ```
 kcm-ai-challenge/
+├── Dockerfile                # Production container configuration
+├── .dockerignore             # Excluded files for Docker build
+├── .gcloudignore             # Excluded files for Cloud Run deploy
 ├── app/
-│   ├── main.py              # Entry point (pywebview + Flask)
+│   ├── main.py              # Entry point (Starts server)
 │   ├── config.py            # Configuration & environment loading
 │   ├── server.py            # Flask API routes & pipeline orchestration
 │   ├── services/
-│   │   ├── ocr_service.py       # Sarvam Document Intelligence integration
-│   │   ├── translate_service.py # Sarvam Translate with chunking
+│   │   ├── translate_service.py # Gemini Translate
 │   │   ├── rtf_service.py       # RTF generation
 │   │   ├── scrutiny_extract.py  # PDF and Excel extraction for Order Scrutiny
 │   │   ├── scrutiny_excel.py    # Excel discrepancy report generation
 │   │   ├── scrutiny_service.py  # Order Scrutiny AI analysis & orchestration
 │   │   ├── notice_service.py    # Notice Reply AI analysis & orchestration
 │   │   ├── notice_docx.py       # DOCX reply skeleton generation
-│   │   └── notice_excel.py      # Client Checklist Excel generation
+│   │   ├── notice_excel.py      # Client Checklist Excel generation
+│   │   └── caselaw_service.py   # Case Law Finder analysis & orchestration
 │   ├── templates/
 │   │   └── index.html        # App UI
 │   └── static/
@@ -125,7 +149,6 @@ kcm-ai-challenge/
 
 | Variable | Description |
 |----------|-------------|
-| `SARVAM_API_KEY` | Your Sarvam AI API subscription key *(required for translation)* |
 | `GCP_PROJECT_ID` | Your Google Cloud Project ID *(required for Vertex AI)* |
 | `GCP_LOCATION` | Your Google Cloud location (e.g., `us-central1`) |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to your GCP service account JSON key |
